@@ -17,6 +17,10 @@
     creates: /var/lib/suricata/rules/suricata.rules
 
 # The custom rules have one source, in suricata-rules/ next to their captures.
+# -T exits 1 if any rule fails to parse, so a broken file never replaces the
+# live one. -S loads only this file. The socket is off so the test can't
+# replace the daemon's (decision 38). A reload swaps the rules in without the
+# fail-closed pause of a restart (decision 44).
 - name: Install the custom rules
   ansible.builtin.copy:
     src: "{{ playbook_dir }}/../suricata-rules/rules/local.rules"
@@ -24,7 +28,8 @@
     owner: root
     group: root
     mode: "0644"
-  notify: Restart Suricata
+    validate: /usr/bin/suricata -T -c /etc/suricata/suricata.yaml -S %s --set unix-command.enabled=no
+  notify: Reload Suricata rules
 
 # The whole file (decision 37). -T loads the config and every rule, so a
 # broken file or rule never replaces the running one. It takes a few seconds.

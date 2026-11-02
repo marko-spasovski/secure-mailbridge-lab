@@ -35,12 +35,22 @@
     name: unbound
     state: restarted
 
-# A restart, not reload-rules, because reload-rules was refused once (cause
-# still unknown). Forwarded traffic pauses while Suricata starts.
+# For config and unit changes. Forwarded traffic pauses while Suricata starts.
 - name: Restart Suricata
   ansible.builtin.systemd_service:
     name: suricata
     state: restarted
+
+# For rule changes (decision 44). Runs after a restart if both were notified,
+# so it retries until the new process opens its socket. suricatasc exits 0
+# even when the engine refuses, so success is read from the reply.
+- name: Reload Suricata rules
+  ansible.builtin.command: suricatasc -c reload-rules
+  register: fw_ips_suricata_reload
+  until: fw_ips_suricata_reload.stdout is search('"return":\s*"OK"')
+  retries: 12
+  delay: 10
+  changed_when: true
 
 - name: Restart OpenVPN
   ansible.builtin.systemd_service:
