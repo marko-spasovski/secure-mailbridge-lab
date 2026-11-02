@@ -135,6 +135,7 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
 - [ ] **1.14** `app` role: Mailbridge from ECR pinned by digest, listening on 3000, secrets from SSM · C
   - Note: two DB roles (decision 54): db creates `mailbridge_app`; app runs migrate as the owner, applies `db-roles.sql` with `psql`, then runs the app as `mailbridge_app`. Secrets generated in `persistent` (decision 55); OAuth secrets wait for 1.19
   - Note: secrets reach the containers through start scripts under systemd with `--rm` (decision 56); the image is built and pushed by hand for now, automated in T2.2 (decision 57). The app host and its role are in `modules/compute/app.tf`
+  - Note: db creates `mailbridge_app` and sets both passwords with `set-db-password <role> <parameter>`; `pg_hba` allows both roles from 10.0.3.10 and loopback only; app gets the `common` baseline in `site.yml`
   - Verify: `docker inspect` shows the pinned digest; port 3000 reachable from proxy, unreachable from the VPN directly; `psql` to 10.0.4.10 as the app user connects (decision 48)
 - [ ] **1.15** `proxy` role: Nginx, TLS, rate limit, ModSecurity v3 + CRS, `certbot-dns-route53` (staging) · C
   - Verify: `curl -k https://mail.<domain>` over VPN returns 200; `?id=1' OR '1'='1` gets 403 and is in the audit log; `nc -zv -w 3 10.0.4.10 5432` from proxy times out (decision 48)
