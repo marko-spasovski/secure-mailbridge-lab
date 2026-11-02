@@ -13,7 +13,7 @@ it is verified, and the relevant doc section is updated.
 ## Current position
 
 - **Phase:** 1, Tier 1 on AWS (0.6 and 0.7 still open)
-- **Next task:** the "Before db" list below, then 1.13, the `db` role. fw-ips is in Terraform and Ansible and was rebuilt from code (2026-11-02).
+- **Next task:** 1.13, the `db` host and role. "Before db" is finished (2026-11-02): fw-ips was rebuilt from code twice, the inventory is dynamic, and the DB password exists in SSM.
 
 ## Before db (agreed 2026-11-02)
 
