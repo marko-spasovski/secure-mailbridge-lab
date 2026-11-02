@@ -8,8 +8,8 @@ variable "domain" {
   type        = string
 }
 
-variable "fw_ami_id" {
-  description = "Pinned Canonical Ubuntu 24.04 LTS x86_64 AMI for fw-ips."
+variable "ubuntu_ami_id" {
+  description = "Pinned Canonical Ubuntu 24.04 LTS x86_64 AMI for every host."
   type        = string
 }
 
@@ -18,8 +18,8 @@ variable "ssh_public_key" {
   type        = string
 }
 
-variable "fw_enabled" {
-  description = "Session switch (decision 41): terraform apply -var fw_enabled=false at the end of a session, plain terraform apply at the start."
+variable "hosts_enabled" {
+  description = "Session switch (decision 41): terraform apply -var hosts_enabled=false at the end of a session removes every session host; plain terraform apply at the start."
   type        = bool
   default     = true
 }

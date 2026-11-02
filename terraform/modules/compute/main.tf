@@ -8,10 +8,10 @@ resource "aws_key_pair" "ansible" {
 }
 
 resource "aws_instance" "fw" {
-  count = var.fw_enabled ? 1 : 0
+  count = var.hosts_enabled ? 1 : 0
 
   #checkov:skip=CKV_AWS_126:Detailed monitoring is billed per metric; node_exporter covers metrics in Tier 2.
-  ami                  = var.fw_ami_id
+  ami                  = var.ubuntu_ami_id
   instance_type        = var.fw_instance_type
   key_name             = aws_key_pair.ansible.key_name
   iam_instance_profile = aws_iam_instance_profile.fw.name
@@ -80,7 +80,7 @@ resource "aws_instance" "fw" {
 # Lives with the lab stack and is released on destroy, so no idle IP is
 # billed (ARCHITECTURE.md §3).
 resource "aws_eip" "fw" {
-  count = var.fw_enabled ? 1 : 0
+  count = var.hosts_enabled ? 1 : 0
 
   #checkov:skip=CKV2_AWS_19:Associated with the fw-ips ENI by aws_eip_association, which checkov does not recognise.
   domain = "vpc"
@@ -93,7 +93,7 @@ resource "aws_eip" "fw" {
 # Associated with the ENI, not the instance, so the address survives an
 # instance replacement.
 resource "aws_eip_association" "fw" {
-  count = var.fw_enabled ? 1 : 0
+  count = var.hosts_enabled ? 1 : 0
 
   allocation_id        = aws_eip.fw[0].id
   network_interface_id = var.fw_eni_id
@@ -105,7 +105,7 @@ resource "aws_eip_association" "fw" {
   depends_on = [aws_instance.fw]
 }
 
-# count was added for fw_enabled (decision 41); these keep the existing
+# count was added for hosts_enabled (decision 41); these keep the existing
 # resources instead of replacing them.
 moved {
   from = aws_instance.fw

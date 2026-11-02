@@ -22,11 +22,14 @@ module "security" {
 module "compute" {
   source = "../modules/compute"
 
-  fw_enabled     = var.fw_enabled
-  fw_ami_id      = var.fw_ami_id
+  hosts_enabled  = var.hosts_enabled
+  ubuntu_ami_id  = var.ubuntu_ami_id
   fw_eni_id      = module.network.fw_eni_id
   fw_private_ip  = module.network.fw_private_ip
   ssh_public_key = var.ssh_public_key
+
+  db_subnet_id         = module.network.subnet_ids["data"]
+  db_security_group_id = module.security.security_group_ids["db"]
 }
 
 # The zone belongs to the persistent stack (task 1.2), so lab only looks it up.
@@ -39,7 +42,7 @@ data "aws_route53_zone" "lab" {
 # Terraform take over the record made by hand. Removed with fw-ips, so the
 # name never points at a released address that someone else may now hold.
 resource "aws_route53_record" "vpn" {
-  count = var.fw_enabled ? 1 : 0
+  count = var.hosts_enabled ? 1 : 0
 
   zone_id         = data.aws_route53_zone.lab.zone_id
   name            = "vpn.${var.domain}"
