@@ -46,3 +46,7 @@
   ansible.builtin.systemd_service:
     name: openvpn-server@server
     state: restarted
+
+- name: Refresh the package lists
+  ansible.builtin.apt:
+    update_cache: true

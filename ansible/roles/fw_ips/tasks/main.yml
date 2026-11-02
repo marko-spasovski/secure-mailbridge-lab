@@ -1,4 +1,7 @@
 ---
+- name: Set up apt and security updates
+  ansible.builtin.import_tasks: base.yml
+
 - name: Harden sshd
   ansible.builtin.import_tasks: sshd.yml
 
