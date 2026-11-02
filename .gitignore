@@ -43,5 +43,6 @@ terraform/lab/imports.tf
 # Real domain name (see ansible/group_vars/all/domain.yml.example)
 ansible/group_vars/all/domain.yml
 
-# Real instance IDs (see ansible/inventories/aws/hosts.yml.example)
+# Old static inventory with real instance IDs. Replaced by aws_ec2.yml
+# (decision 45); still ignored so a stray copy can't be committed.
 ansible/inventories/aws/hosts.yml

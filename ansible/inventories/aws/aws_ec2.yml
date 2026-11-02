@@ -1,0 +1,32 @@
+---
+# Dynamic inventory (decision 45). Each run asks EC2 which lab instances are
+# running, so no instance ID is written down and none can go stale. The
+# file name must end in aws_ec2.yml for the plugin to claim it.
+plugin: amazon.aws.aws_ec2
+regions:
+  - eu-central-1
+
+# Only this lab's instances, and only running ones: a stopped or terminated
+# instance can't be reached over SSM anyway.
+filters:
+  tag:Project: mailbridge-lab
+  instance-state-name: running
+
+# The Role tag is the Ansible group: Role = fw_ips puts the host in fw_ips.
+# Terraform sets the tag, so the tag decides which role a host gets.
+keyed_groups:
+  - key: ec2_tags.Role
+    prefix: ""
+    separator: ""
+    leading_separator: false
+
+# Readable host names in output and for host_vars/.
+hostnames:
+  - tag:Name
+
+# SSM targets instances by ID (decision 36): the ProxyCommand's %h.
+compose:
+  ansible_host: instance_id
+
+# Fail the run on a bad expression above instead of skipping it quietly.
+strict: true

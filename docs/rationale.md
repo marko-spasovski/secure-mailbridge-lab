@@ -595,3 +595,15 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** `suricatasc` returns exit code 0 even when the engine refuses, so the handler reads `"return": "OK"` from the reply. On a fresh host both handlers fire, and the reload runs after the restart. It retries for up to two minutes until the new process opens its socket. The extra reload is harmless.
 
 **Verify once built.** A rule change makes `site.yml` show `Install the custom rules` changed and `Reload Suricata rules` run, with no `Restart Suricata`. `sudo suricatasc -c uptime` keeps counting instead of resetting, which shows the engine and its traffic never stopped, and `sudo suricatasc -c ruleset-stats` shows 0 failed. A deliberately broken rule fails the task at `validate`, and the live rules stay unchanged.
+
+## 45. How Ansible finds the hosts (2026-11-02)
+
+**Problem.** Ansible reaches hosts through SSM, which targets them by instance ID. fw-ips gets a new ID every session (decision 41), and the ID was copied into an untracked `hosts.yml` with `sed`. With one host that works. Tier 1 has five, and a stale or swapped ID either fails the connection or, worse, applies one host's role to another.
+
+**Options.** A: the `amazon.aws.aws_ec2` dynamic inventory plugin, which asks EC2 at run time. B: Terraform writes `hosts.yml` with a `local_file` resource. C: a script turns `terraform output -json` into `hosts.yml`.
+
+**Chosen: A.** A static inventory is a copy of the IDs, refreshed at certain moments. A dynamic one keeps no copy: each run asks EC2 for running instances tagged `Project=mailbridge-lab` and makes the `Role` tag the group, so `Role=fw_ips` lands in `fw_ips`. Ansible already needs the admin's AWS credentials for the SSM `ProxyCommand`, so the lookup adds no new kind of access. A new host needs only its tags in Terraform. B couples Terraform to Ansible's folder, adds the `local` provider, and leaves a file that exists only where the apply ran. C is still a static file between runs, and one more step to forget until the Makefile (0.6) exists.
+
+**Trade-off accepted.** Tags are now part of security: whatever carries `Role=db` gets the `db` role, so only Terraform sets them, and only the admin user can change them. The laptop needs `boto3` and `botocore[crt]` inside Ansible's pipx venv (`pipx inject ansible boto3`, then `pipx inject --force ansible "botocore[crt]"`). The CRT part is needed for `aws login` credentials. The host is named after its `Name` tag (`mailbridge-lab-fw-ips`). amazon.aws 11.4.0 warns on every run that the `tags` host variable is deprecated, and core warns that `tags` is a reserved name. Both come from the plugin itself (`parse()` warns unconditionally), and our file uses only `ec2_tags`. They are left visible, because `deprecation_warnings = False` would also hide warnings about our own code.
+
+**Verify once built.** `ansible-inventory --graph` lists each host under its role group. `ansible fw_ips -m ping` returns `pong`, `site.yml` reports `changed=0`, and after a teardown and rebuild the new instance appears without any edit.

@@ -21,14 +21,14 @@ it is verified, and the relevant doc section is updated.
    - `aws login`, then `aws sts get-caller-identity --query Arn --output text` (ends in `marko-admin`)
    - `ssh-add ~/.ssh/mailbridge-lab-ansible`
    - Claude saves the plan: `terraform -chdir=terraform/lab plan -out=<scratchpad>/on.tfplan` (expect 4 to add: instance, Elastic IP, association, `vpn` record). Marko runs `! cd terraform/lab && terraform apply <scratchpad>/on.tfplan`
-   - New ID into the inventory: `sed -i "s/ansible_host: i-[0-9a-f]*/ansible_host: $(terraform -chdir=terraform/lab output -raw fw_instance_id)/" ansible/inventories/aws/hosts.yml`
+   - No inventory step: the `aws_ec2` plugin finds the new instance by its tags (decision 45). `cd ansible && ansible-inventory --graph` shows it under `fw_ips`
    - Wait for first boot: `cd ansible && ansible fw_ips -m command -a 'cloud-init status --wait'` (expect `status: done`)
    - `ansible-playbook site.yml`, then again (expect `changed=0`)
    - Connect the VPN; `ping -c 3 10.0.1.10`; `dig +short @10.0.1.10 mail.<domain>` (expect `10.0.2.10`)
    - `terraform -chdir=terraform/lab plan` (expect no changes)
    - If all pass: delete the fallback AMI and its snapshot, with Marko's OK
 2. [x] **Small fixes, one PR each:** ~~`depends_on = [aws_instance.fw]` on the Elastic IP association~~ (PR 26, proved at the next start); ~~remove `default` from the fw-ips ENI~~ (decision 42, verified); ~~tighten the fw-ips role description and use the account ID instead of `*` in its grant~~ (decision 43, verified); ~~rule 1000004 `flow:to_server`~~ (written by Claude at Marko's explicit request; the Suricata warning about a missing direction is gone, and the flood capture still raises it).
-3. [ ] **Inventory from Terraform:** decide between the `aws_ec2` dynamic inventory and generating `hosts.yml` from `terraform output`, before more hosts make hand-edited IDs error-prone.
+3. [x] **Inventory from Terraform:** the `aws_ec2` dynamic inventory, by the `Project` and `Role` tags (decision 45). Verified 2026-11-02: `ansible-inventory --graph` shows `fw_ips` → `mailbridge-lab-fw-ips`, ping returns `pong`, and `site.yml` reports `changed=0`. Each new host needs `Project` and `Role` tags in Terraform.
 4. [ ] **Where `db`'s password lives** (part of 1.2): Terraform stores parameter values in state, so decide how `/mailbridge/db-password` is created. Consider importing the hand-built `persistent` pieces at the same time.
 
 End every session with: Claude saves `terraform -chdir=terraform/lab plan -var fw_enabled=false -out=<scratchpad>/off.tfplan` (expect 4 to destroy), Marko disconnects the VPN and runs the apply, Claude confirms no instance, Elastic IP or volume is left.
@@ -38,7 +38,7 @@ End every session with: Claude saves `terraform -chdir=terraform/lab plan -var f
 - [~] **Delegate the subdomain:** zone and NS records built by hand and verified with `dig`, parent MX unchanged. Import the zone in 1.2.
 - [x] **Fallback AMI:** deleted with its snapshot on 2026-11-02 after the second rebuild passed. It was: keep `mailbridge-lab-fw-ips-handbuilt-2026-11-02` and its snapshot until the next session's rebuild from code also passes every check, then delete both. It's the only copy of the hand-built host, for inspecting anything the role may still miss.
 - [x] **Session routine (decision 41, replaces decision 24):**
-  - Start: `terraform -chdir=terraform/lab apply`, then put `terraform -chdir=terraform/lab output -raw fw_instance_id` into `ansible/inventories/aws/hosts.yml`, wait for `cloud-init status` = `done`, run `ansible-playbook site.yml` from `ansible/`, and connect the VPN.
+  - Start: `terraform -chdir=terraform/lab apply` (the dynamic inventory finds the new instance, decision 45), wait for `cloud-init status` = `done`, run `ansible-playbook site.yml` from `ansible/`, and connect the VPN.
   - End: `terraform -chdir=terraform/lab apply -var fw_enabled=false`, then check that no instance or Elastic IP is left.
 - [x] **Ansible over SSM:** decided: SSH tunnelled through SSM with a laptop-only key (decision 36). fw-ips gets the public key once through SSM, because it was launched without a key pair.
 - [x] **Suricata upkeep:** daily `suricata-update.timer` with `reload-rules`; the refusal was a test run replacing the command socket (decision 38).
