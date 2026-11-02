@@ -127,6 +127,7 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
 **db, app, proxy**
 - [ ] **1.13** `db` role: PostgreSQL, app user, access from the app host only · C
   - Note: db reads `/mailbridge/db-password` with its own instance role and sets it on the host (decision 47)
+  - Note: 2026-11-02, step 1 (Terraform host and role) and 2a (`common` role) done and verified; 2b is the `db` role. The helper `set-db-password` sets the password through stdin, never argv, a file or an Ansible variable (decision 52)
   - Verify (decision 48, db side only): PostgreSQL listens on 10.0.4.10:5432; `pg_hba` allows only the app user from 10.0.3.10/32 with `scram-sha-256`; a local login with the SSM value works; `nc -zv -w 3 10.0.4.10 5432` from the VPN admin pool times out and fw-ips logs the drop; the IAM simulator allows only `/mailbridge/db-password`. "Connect from app" moves to 1.14 and "refused from proxy" to 1.15
 - [ ] **1.14** `app` role: Mailbridge from ECR pinned by digest, listening on 3000, secrets from SSM · C
   - Verify: `docker inspect` shows the pinned digest; port 3000 reachable from proxy, unreachable from the VPN directly; `psql` to 10.0.4.10 as the app user connects (decision 48)

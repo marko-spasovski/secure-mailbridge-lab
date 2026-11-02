@@ -1,0 +1,8 @@
+---
+# Collections the playbooks use, pinned to what the laptop runs.
+# Install with: ansible-galaxy collection install -r requirements.yml
+collections:
+  - name: amazon.aws
+    version: 11.4.0
+  - name: community.postgresql
+    version: 4.2.0

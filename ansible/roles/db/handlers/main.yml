@@ -1,0 +1,12 @@
+---
+# Drops open connections; only app connects, and it reconnects.
+- name: Restart PostgreSQL
+  ansible.builtin.systemd_service:
+    name: "postgresql@{{ db_pg_version }}-main"
+    state: restarted
+
+# pg_hba.conf is reread on reload; existing connections stay open.
+- name: Reload PostgreSQL
+  ansible.builtin.systemd_service:
+    name: "postgresql@{{ db_pg_version }}-main"
+    state: reloaded

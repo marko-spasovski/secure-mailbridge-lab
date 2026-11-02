@@ -1,0 +1,5 @@
+---
+# PostgreSQL major version in Ubuntu 24.04's archive (no extra package
+# source, as with Suricata in decision 33). It names the config directory
+# and the cluster's systemd unit.
+db_pg_version: "16"
