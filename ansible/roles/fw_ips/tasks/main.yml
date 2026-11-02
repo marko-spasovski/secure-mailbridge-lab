@@ -1,10 +1,6 @@
 ---
-- name: Set up apt and security updates
-  ansible.builtin.import_tasks: base.yml
-
-- name: Harden sshd
-  ansible.builtin.import_tasks: sshd.yml
-
+# Runs after the common role (site.yml), which sets up apt, sshd and the
+# SSM fetch helper this role uses.
 - name: Configure forwarding and the firewall
   ansible.builtin.import_tasks: network.yml
 

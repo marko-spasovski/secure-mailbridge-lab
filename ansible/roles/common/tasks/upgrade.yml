@@ -1,0 +1,22 @@
+---
+# Private hosts have no network at first boot, so their cloud-init doesn't
+# upgrade; this does, once fw-ips forwards (decision 50). On fw-ips it's
+# normally a no-op, because its cloud-init already upgraded. Reports changed
+# only when packages were actually upgraded.
+- name: Upgrade all packages
+  ansible.builtin.apt:
+    upgrade: dist
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Check whether a reboot is required
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: common_reboot_required
+
+# Waits for the host to come back, then reconnects through the SSM tunnel.
+# A reboot of fw-ips briefly drops VPN clients and forwarded traffic.
+- name: Reboot for a new kernel or library
+  ansible.builtin.reboot:
+    reboot_timeout: 600
+  when: common_reboot_required.stat.exists

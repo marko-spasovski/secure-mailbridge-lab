@@ -1,0 +1,21 @@
+---
+# Used by any role that pulls its own secrets with its instance role
+# (decisions 39, 47).
+# The helper calls aws. Ubuntu 24.04 has no awscli package and the AMI doesn't
+# ship the CLI; the hand-built host got this snap by hand, which the first
+# rebuild exposed (2026-11-02). classic: the CLI needs the host's files.
+- name: Install the AWS CLI
+  ansible.builtin.command: snap install aws-cli --classic --channel=v2/stable
+  args:
+    creates: /snap/bin/aws
+
+# Installed even in check mode: host roles call it to compare their files,
+# and with its "check" argument it only reads.
+- name: Install the SSM fetch helper
+  ansible.builtin.copy:
+    src: fetch-ssm-param
+    dest: /usr/local/sbin/fetch-ssm-param
+    owner: root
+    group: root
+    mode: "0755"
+  check_mode: false
