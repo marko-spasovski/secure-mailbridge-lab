@@ -1,6 +1,0 @@
-      types:
-        - alert
-        - tls
-        - dns
-        - flow
-        - drop

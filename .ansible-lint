@@ -1,0 +1,5 @@
+---
+# Upstream Suricata config, kept byte for byte so its diff shows only our
+# edits (decision 37). Its comment style isn't ours to fix.
+exclude_paths:
+  - ansible/roles/fw_ips/files/suricata.yaml

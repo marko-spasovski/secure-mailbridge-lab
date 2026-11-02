@@ -1,0 +1,72 @@
+---
+# Suricata inline on NFQUEUE 0, tasks 1.11 and 1.12 (decisions 32 to 35).
+# It fails closed: while it restarts, forwarded VPN traffic stops for a few
+# seconds. SSM and the VPN itself use input/output and keep working.
+- name: Install Suricata
+  ansible.builtin.apt:
+    name:
+      - suricata
+      - suricata-update
+    state: present
+
+# ET Open is downloaded, not stored in the repo. Only a fresh host runs this;
+# scheduled updates are a separate step.
+- name: Download ET Open on a fresh host
+  ansible.builtin.command: suricata-update
+  args:
+    creates: /var/lib/suricata/rules/suricata.rules
+
+# The custom rules have one source, in suricata-rules/ next to their captures.
+- name: Install the custom rules
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../suricata-rules/rules/local.rules"
+    dest: /etc/suricata/rules/local.rules
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Suricata
+
+# The whole file (decision 37). -T loads the config and every rule, so a
+# broken file or rule never replaces the running one. It takes a few seconds.
+- name: Install suricata.yaml
+  ansible.builtin.copy:
+    src: suricata.yaml
+    dest: /etc/suricata/suricata.yaml
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/bin/suricata -T -c %s
+  notify: Restart Suricata
+
+- name: Create the systemd drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/suricata.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Run Suricata inline on NFQUEUE 0
+  ansible.builtin.copy:
+    src: suricata-nfqueue.conf
+    dest: /etc/systemd/system/suricata.service.d/nfqueue.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload systemd units
+    - Restart Suricata
+
+- name: Rotate Suricata logs daily
+  ansible.builtin.copy:
+    src: suricata-logrotate
+    dest: /etc/logrotate.d/suricata
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable and start Suricata
+  ansible.builtin.systemd_service:
+    name: suricata
+    enabled: true
+    state: started
