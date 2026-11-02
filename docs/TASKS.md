@@ -84,13 +84,13 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
 - [~] **1.8** Hand build verified; the `fw_ips` role part is still to do. `fw_ips` role: OpenVPN server, §5 hardening, `client-config-dir` pools, profiles using `vpn.<domain>` · C
   - Verify: user cert gets 10.8.0.x, admin cert gets 10.8.1.x
 - [x] **1.9a** nftables: forwarding and NAT for private subnets · **C** (Marko explicitly asked Claude to write this one)
-  - Note: verified by hand with a temporary VM. The files are in `ansible/roles/fw_ips/files/`; the role tasks that install them are still to do.
+  - Note: verified by hand with a temporary VM. The files are in `ansible/roles/fw_ips/files/`; `tasks/network.yml` installs them (2026-11-02, live rules unchanged by checksum).
   - Note: private hosts reach SSM through fw-ips, so this comes before any of them is configured
   - Verify: `aws ssm describe-instance-information` lists a private test host as `Online`
 - [x] **1.9b** Core nftables ruleset: full §4 policy on top of 1.9a · **C** (Marko explicitly asked Claude to write this one)
-  - Note: verified by hand, including a reboot. No proxy exists yet, so 443 was shown as not dropped; a working connection is proved in 1.15. The role tasks that install the files are still to do.
+  - Note: verified by hand, including a reboot. No proxy exists yet, so 443 was shown as not dropped; a working connection is proved in 1.15. `tasks/network.yml` installs the files.
   - Verify: `nft list ruleset`; user pool reaches only 10.0.2.10:443, other traffic is dropped and logged; SSM still `Online`
-- [~] **1.10** Hand build verified for admin and user pools, including a reboot; the `fw_ips` role part is still to do. `fw_ips` role: Unbound with the private `mail.<domain>` record; push a route to 10.0.1.10/32 to VPN clients (decision 27) · C
+- [~] **1.10** Hand build verified for admin and user pools, including a reboot. Unbound is in the role (`tasks/dns.yml`); the pushed route waits for the OpenVPN part. `fw_ips` role: Unbound with the private `mail.<domain>` record; push a route to 10.0.1.10/32 to VPN clients (decision 27) · C
   - Verify: `dig @10.0.1.10 mail.<domain> +short` from the VPN returns 10.0.2.10
 - [~] **1.11** Hand build verified, including fail-closed and a reboot, using 528 MB of RAM with ET Open; the `fw_ips` role part is still to do. `fw_ips` role: Suricata install, NFQUEUE wiring, `eve.json` · C
   - Verify: `suricata -T` passes; `sudo tail -f eve.json` shows flows while using the VPN

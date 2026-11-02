@@ -1,0 +1,32 @@
+---
+# Unbound for VPN clients and private subnets, task 1.10 (decisions 27, 28).
+# Fail early with a clear message instead of publishing a placeholder name.
+- name: Check that the real domain is set
+  ansible.builtin.assert:
+    that:
+      - domain is defined
+      - domain != "lab.example.com"
+    fail_msg: Copy group_vars/all/domain.yml.example to domain.yml and set the real subdomain.
+    quiet: true
+
+- name: Install Unbound
+  ansible.builtin.apt:
+    name: unbound
+    state: present
+
+# unbound-checkconf tests the new file before it replaces the live one.
+- name: Install the Unbound config
+  ansible.builtin.template:
+    src: mailbridge.conf.j2
+    dest: /etc/unbound/unbound.conf.d/mailbridge.conf
+    owner: root
+    group: root
+    mode: "0644"
+    validate: /usr/sbin/unbound-checkconf %s
+  notify: Restart Unbound
+
+- name: Enable and start Unbound
+  ansible.builtin.systemd_service:
+    name: unbound
+    enabled: true
+    state: started
