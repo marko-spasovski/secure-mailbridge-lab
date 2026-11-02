@@ -691,3 +691,15 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** One more script to own. The plain value briefly reaches the PostgreSQL server, which hashes it with SCRAM-SHA-256. That happens on the same host, and only `pg_authid` keeps the hash. The loopback login line in `pg_hba.conf` exists partly for this test. CI now installs the pinned collections from `ansible/requirements.yml` before ansible-lint, because ansible-lint brings only ansible-core.
 
 **Verify once built.** The first run shows `Set the mailbridge password from SSM` changed, and the second run shows it `ok`. `ansible-playbook site.yml -v` contains no password. `PGPASSWORD` with a wrong value fails, and the SSM value works (tested on db without printing it). `grep -c` for the value in `/var/log/postgresql/` returns 0.
+
+## 53. How the ECR repository is configured (2026-11-02)
+
+**Problem.** app runs the Mailbridge image from ECR, pinned by digest (§3). An image has two kinds of name: a tag (`mailbridge:v1.2`) is a label that by default can be moved to another image, and a digest (`mailbridge@sha256:...`) is a hash of the content that can never point anywhere else. The repository settings decide whether tags can be trusted, what is scanned, and how much storage accumulates.
+
+**Options.** A: immutable tags, basic scanning on push, KMS with the AWS-managed key, and a lifecycle policy. B: mutable tags, relying on the digest pin in Ansible. C: immutable tags with an exclusion filter that keeps `latest` movable.
+
+**Chosen: A.** With `IMMUTABLE`, once `v1.2` is pushed no one can push a different image under that tag, so a tag seen in a log or commit always names one image, and someone with push rights can't silently replace a release. Basic scanning is free and checks each push against a CVE database; enhanced scanning (Inspector) is billed. `KMS` with the AWS-managed `aws/ecr` key is free and passes checkov's encryption check without a skip. The lifecycle policy expires untagged images after a day and keeps the last 5 tagged ones, under ECR's free 500 MB a month. The repository is in `persistent` with no `force_delete`, so a lab teardown can't delete images. B is simpler day to day, but a tag then proves nothing. C brings B's weakness back for the tag people use most.
+
+**Trade-off accepted.** Every build needs a new tag, such as a version or the git commit, so `latest` can't be re-pushed. The untagged rule could remove the child manifests of a multi-platform image index or a build attestation. The build decision in 1.14 has to check this: build a single `linux/amd64` image, or confirm ECR keeps manifests that an index references.
+
+**Verify once built.** `aws ecr describe-repositories --repository-names mailbridge` shows `IMMUTABLE`, `scanOnPush: true` and `KMS`. `aws ecr get-lifecycle-policy` returns both rules. Pushing the same tag twice fails with `ImageTagAlreadyExistsException`, and a push shows a scan result in `aws ecr describe-image-scan-findings`.
