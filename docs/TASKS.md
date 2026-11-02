@@ -93,6 +93,7 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
 - [~] **1.10** Hand build verified for admin and user pools, including a reboot. Unbound is in the role (`tasks/dns.yml`); the pushed route waits for the OpenVPN part. `fw_ips` role: Unbound with the private `mail.<domain>` record; push a route to 10.0.1.10/32 to VPN clients (decision 27) · C
   - Verify: `dig @10.0.1.10 mail.<domain> +short` from the VPN returns 10.0.2.10
 - [~] **1.11** Hand build verified, including fail-closed and a reboot, using 528 MB of RAM with ET Open; the `fw_ips` role part is still to do. `fw_ips` role: Suricata install, NFQUEUE wiring, `eve.json` · C
+  - Note: the role owns the whole `suricata.yaml`, installed with `copy` (decision 37)
   - Verify: `suricata -T` passes; `sudo tail -f eve.json` shows flows while using the VPN
 - [x] **1.12** Custom Suricata rules and test pcaps · **C** (Marko explicitly asked Claude to write these)
   - Note: captures are synthetic, so re-test rules against real TLS in 1.15, then consider promoting them to `drop`. `suricatasc reload-rules` was refused once, cause unknown, so a restart loaded them.

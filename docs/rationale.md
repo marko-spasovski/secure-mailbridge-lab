@@ -495,3 +495,15 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** There is a key to manage. A stolen key alone reaches nothing, because SSM also needs a valid AWS session, but a lost key means installing a new one through SSM. fw-ips was launched without a key pair, so its key is added once by hand through SSM. Later instances get it from Terraform's `aws_key_pair`, where changing the key replaces the instance.
 
 **Verify once built.** `ansible fw_ips -m ping` returns `pong`; `ss -tlnp` on the host shows sshd on `127.0.0.1:22` only; `nc -zv` to the host's port 22 from the admin pool fails; the instance role's policies are unchanged.
+
+## 37. How the role manages suricata.yaml (2026-11-02)
+
+**Problem.** The live `suricata.yaml` is Ubuntu's 2,150-line default with three hand edits: `HOME_NET`, the `eve-log` types, and `local.rules` in `rule-files`. The repo held only an `eve` fragment, so a rebuilt fw-ips would get the default file and lose all three.
+
+**Options.** A: own the whole file in the role. B: targeted edits to the package file with `lineinfile`, `replace` or `blockinfile`. C: keep the package file and override settings with `--set` in the systemd drop-in.
+
+**Chosen: A.** The file in the repo is exactly the file on the host, so `--check --diff` shows any drift, as it did for nftables and Unbound. It's committed in two steps, the untouched package file and then our edits, so `git log -p` shows only the three changes. B depends on the shape of lines we don't control, and replacing a list in the middle of `outputs:` is hard to make idempotent. C relies on list positions such as `outputs.1`, and splits the config across two files. The file goes in with `copy`, because two upstream log-format comments contain `{%`, which Jinja would read as a block.
+
+**Trade-off accepted.** A large file tied to Suricata 7.0.3. After a major upgrade, the new upstream default is compared and our three edits carried over by hand. `HOME_NET` is written in the file rather than coming from a variable.
+
+**Verify once built.** `--check --diff` reports no change on a host built by hand; `suricata -T` passes on the installed file; `git log -p` on the file shows the three edits in one commit.
