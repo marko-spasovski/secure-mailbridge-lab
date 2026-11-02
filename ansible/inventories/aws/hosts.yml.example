@@ -1,0 +1,10 @@
+---
+# Copy to hosts.yml, which git ignores, and set the real instance IDs.
+# SSM targets instances by ID, and IDs are live resource IDs, so they stay
+# out of the public repo. After a rebuild the IDs change: update this file.
+all:
+  children:
+    fw_ips:
+      hosts:
+        fw-ips:
+          ansible_host: i-0123456789abcdef0
