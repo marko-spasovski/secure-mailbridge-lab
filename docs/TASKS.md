@@ -27,7 +27,7 @@ it is verified, and the relevant doc section is updated.
    - Connect the VPN; `ping -c 3 10.0.1.10`; `dig +short @10.0.1.10 mail.<domain>` (expect `10.0.2.10`)
    - `terraform -chdir=terraform/lab plan` (expect no changes)
    - If all pass: delete the fallback AMI and its snapshot, with Marko's OK
-2. [ ] **Small fixes, one PR each:** ~~`depends_on = [aws_instance.fw]` on the Elastic IP association~~ (PR 26, proved at the next start); ~~remove `default` from the fw-ips ENI~~ (decision 42, verified); tighten the fw-ips role description and use the account ID instead of `*` in its grant (decision 43); rule 1000004 `flow:to_server`, written by Marko and reviewed by Claude.
+2. [x] **Small fixes, one PR each:** ~~`depends_on = [aws_instance.fw]` on the Elastic IP association~~ (PR 26, proved at the next start); ~~remove `default` from the fw-ips ENI~~ (decision 42, verified); ~~tighten the fw-ips role description and use the account ID instead of `*` in its grant~~ (decision 43, verified); ~~rule 1000004 `flow:to_server`~~ (written by Claude at Marko's explicit request; the Suricata warning about a missing direction is gone, and the flood capture still raises it).
 3. [ ] **Inventory from Terraform:** decide between the `aws_ec2` dynamic inventory and generating `hosts.yml` from `terraform output`, before more hosts make hand-edited IDs error-prone.
 4. [ ] **Where `db`'s password lives** (part of 1.2): Terraform stores parameter values in state, so decide how `/mailbridge/db-password` is created. Consider importing the hand-built `persistent` pieces at the same time.
 
