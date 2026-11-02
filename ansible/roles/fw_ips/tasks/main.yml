@@ -4,3 +4,6 @@
 
 - name: Configure forwarding and the firewall
   ansible.builtin.import_tasks: network.yml
+
+- name: Configure DNS for VPN clients and private subnets
+  ansible.builtin.import_tasks: dns.yml
