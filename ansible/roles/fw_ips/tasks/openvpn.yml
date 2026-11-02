@@ -33,6 +33,14 @@
     group: root
     mode: "0644"
 
+# The helper calls aws. Ubuntu 24.04 has no awscli package and the AMI doesn't
+# ship the CLI; the hand-built host got this snap by hand, which the first
+# rebuild exposed (2026-11-02). classic: the CLI needs the host's files.
+- name: Install the AWS CLI
+  ansible.builtin.command: snap install aws-cli --classic --channel=v2/stable
+  args:
+    creates: /snap/bin/aws
+
 # Installed even in check mode: the tasks below need it to compare the files,
 # and in "check" mode it only reads.
 - name: Install the SSM fetch helper

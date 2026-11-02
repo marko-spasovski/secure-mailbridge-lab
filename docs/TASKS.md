@@ -13,7 +13,7 @@ it is verified, and the relevant doc section is updated.
 ## Current position
 
 - **Phase:** 1, Tier 1 on AWS (0.6 and 0.7 still open)
-- **Next task:** 1.6, the Terraform for fw-ips (instance, role, Elastic IP, `vpn` record), then the rebuild test. The `fw_ips` role covers everything built by hand (2026-11-02).
+- **Next task:** 1.13, the `db` role. fw-ips is in Terraform and Ansible and was rebuilt from code (2026-11-02). Delete the fallback AMI `mailbridge-lab-fw-ips-handbuilt-2026-11-02` and its snapshot when Marko approves.
 
 ## Open items
 
@@ -21,6 +21,7 @@ it is verified, and the relevant doc section is updated.
 - [ ] **Each session during the fw-ips hand build:** start by allocating an Elastic IP, associating it with the ENI, starting fw-ips and updating the `vpn` record; end by stopping fw-ips and releasing the Elastic IP (decision 24).
 - [x] **Ansible over SSM:** decided: SSH tunnelled through SSM with a laptop-only key (decision 36). fw-ips gets the public key once through SSM, because it was launched without a key pair.
 - [x] **Suricata upkeep:** daily `suricata-update.timer` with `reload-rules`; the refusal was a test run replacing the command socket (decision 38).
+- [ ] **Default security group on the fw-ips ENI:** the ENI carries `mailbridge-lab-fw` and `default`. `default` has no rules, so it grants nothing, but §4 says sg-fw only. Remove it in a small separate change.
 - [ ] **VPN client exits on the laptop:** the `openvpn` client process ended twice on 2026-11-02 (about 11:40, and after a server restart) instead of reconnecting. Read the client's last log lines next time it happens.
 - [ ] **Own package mirror or proxy:** Marko wants to discuss this later. Parked until Tier 1 is finished; no design change yet.
 - [ ] **SSH over the VPN:** proposed as a daily-use path from the admin pool, with SSM kept for emergencies. Discuss after 1.9b; no design change yet.
@@ -74,8 +75,9 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Verify: the 1.5a checks pass again; `terraform plan` reports no changes
 
 **fw-ips**
-- [ ] **1.6** Remove the `CKV2_AWS_5` skips as groups get attached. `modules/compute` and IAM: fw-ips instance, IMDSv2, encrypted gp3, `credit_specification = "standard"`, source/dest check off, Elastic IP and `vpn.<domain>` record · C
+- [x] **1.6** Rebuilt from code on 2026-11-02 and verified: second `terraform plan` shows no changes, the third Ansible run `changed=0`, packages and nftables identical to the hand-built host. Remove the `CKV2_AWS_5` skips as groups get attached. `modules/compute` and IAM: fw-ips instance, IMDSv2, encrypted gp3, `credit_specification = "standard"`, source/dest check off, Elastic IP and `vpn.<domain>` record · C
   - Note: roles use `mailbridge-lab-ssm-min`, never `AmazonSSMManagedInstanceCore` (decision 22)
+  - Note: fw-ips is rebuilt from code with IAM and the Elastic IP imported, and an AMI of the old instance as fallback (decision 40)
   - Note: instances get the Ansible public key through `aws_key_pair`; the private key stays on the laptop (decision 36)
   - Verify: `tflint` and `checkov` pass; plan shows `http_tokens = "required"`; the IAM simulator denies the fw-ips role `ssm:GetParameter` on `/vpn/ca/*` and `/mailbridge/*`; `aws ssm start-session` connects; `dig vpn.<domain> +short` matches the Elastic IP
 - [x] **1.7a** Offline CA on the laptop with easy-rsa, outside the repo: CA, CRL, encrypted key backed up to SSM under `/vpn/` · M+C

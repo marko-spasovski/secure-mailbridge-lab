@@ -1,1 +1,4 @@
 flow_log_bucket_arn = "arn:aws:s3:::example-flow-logs-bucket"
+domain              = "lab.example.com"
+fw_ami_id           = "ami-0123456789abcdef0"
+ssh_public_key      = "ssh-ed25519 AAAA... mailbridge-lab-ansible"
