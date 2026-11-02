@@ -42,10 +42,13 @@ resource "aws_instance" "fw" {
     delete_on_termination = true
   }
 
-  # Set the HTTPS mirror at first boot, before Ubuntu's own apt timers run.
-  # The fw_ips role enforces the same file afterwards.
+  # First boot only: set the HTTPS mirror before Ubuntu's own apt timers run
+  # (the fw_ips role enforces the same file afterwards), then fully upgrade
+  # and reboot if a new kernel needs it, as the hand-built host was.
   user_data = <<-EOT
     #cloud-config
+    package_upgrade: true
+    package_reboot_if_required: true
     apt:
       primary:
         - arches: [default]
