@@ -110,6 +110,8 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 
 **Trade-off accepted.** More wiring in the root stack, and the fw-ips ENI briefly holds only the empty default group during creation.
 
+**Revised by decision 42.** The attachment left `default` on the ENI, so the ENI now declares its own groups and network takes sg-fw's ID from security.
+
 **Verify once built.** `aws ec2 describe-network-interfaces` shows `sg-fw` on the ENI. Each rule in `aws ec2 describe-security-group-rules` maps to a §4 row or the egress table.
 
 ---
@@ -557,3 +559,15 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** Each session starts about 10 minutes later and gets a new Elastic IP, and the instance ID changes, so the untracked inventory needs the new ID. Suricata and VPN logs on the host are lost at each teardown until Wazuh collects them (1.17).
 
 **Verify once built.** With the default, the plan shows only moves; with `fw_enabled=false` it shows 4 to destroy and nothing else; afterwards no instance or Elastic IP exists in the region; the next `terraform apply` and Ansible run restore a working VPN.
+
+## 42. Who owns the fw-ips ENI's security groups (2026-11-02)
+
+**Problem.** The fw-ips ENI carried `mailbridge-lab-fw` and the VPC `default` group, while §4 says sg-fw only. An ENI always has at least one group, so AWS gave it `default` when it was created without any. `aws_network_interface_sg_attachment` (decision 7) then added sg-fw, but that resource manages one membership, not the list, so nothing ever removed `default`. `default` has no rules and granted nothing, but the live state didn't match the design, and an audit would flag it.
+
+**Options.** A: declare the full list on the ENI with `security_groups`, and drop the attachment with a `removed` block. B: move the ENI into `modules/security`, next to its group. C: remove `default` by hand with the CLI.
+
+**Chosen: A.** Setting `security_groups` makes Terraform authoritative for the whole list, so `default` goes, and any group added by hand later shows up as drift. The attachment is dropped with `removed { lifecycle { destroy = false } }`, because destroying it would detach sg-fw: the ENI could be left with no group from §4 and the VPN would break until the next apply. B only reverses the dependency, because the network's private routes target the ENI, and it adds a `moved` block between modules. C is drift that the next network rebuild (1.20) would undo.
+
+**Trade-off accepted.** Decision 7 kept dependencies flowing one way (network to security). Now `modules/network` takes sg-fw's ID from `modules/security`, which takes `vpc_id` from network. Terraform allows this because it orders individual resources, not modules: VPC, then sg-fw, then the ENI, with no loop. checkov can't follow the group across modules, so sg-fw keeps its `CKV2_AWS_5` skip with a new reason.
+
+**Verify once built.** The plan shows `1 to change` (the ENI, in place, removing only `default`), the attachment as no longer managed, and `0 to destroy`. After the apply, `aws ec2 describe-network-interfaces --network-interface-ids <eni> --query 'NetworkInterfaces[].Groups[].GroupName' --output text` prints only `mailbridge-lab-fw`; the VPN ping to 10.0.1.10 still works; the next plan shows no changes.

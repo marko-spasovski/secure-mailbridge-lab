@@ -5,7 +5,8 @@ provider "aws" {
 module "network" {
   source = "../modules/network"
 
-  flow_log_bucket_arn = var.flow_log_bucket_arn
+  flow_log_bucket_arn   = var.flow_log_bucket_arn
+  fw_security_group_ids = [module.security.security_group_ids["fw"]]
 }
 
 module "security" {
@@ -13,7 +14,6 @@ module "security" {
 
   vpc_id        = module.network.vpc_id
   vpc_cidr      = module.network.vpc_cidr
-  fw_eni_id     = module.network.fw_eni_id
   fw_private_ip = module.network.fw_private_ip
   subnet_ids    = module.network.subnet_ids
   subnet_cidrs  = module.network.subnet_cidrs
@@ -52,4 +52,14 @@ resource "aws_route53_record" "vpn" {
 moved {
   from = aws_route53_record.vpn
   to   = aws_route53_record.vpn[0]
+}
+
+# The ENI now declares sg-fw itself (decision 42). Destroying the old
+# attachment would detach sg-fw, so Terraform only forgets it.
+removed {
+  from = module.security.aws_network_interface_sg_attachment.fw
+
+  lifecycle {
+    destroy = false
+  }
 }

@@ -42,7 +42,7 @@ End every session with: Claude saves `terraform -chdir=terraform/lab plan -var f
   - End: `terraform -chdir=terraform/lab apply -var fw_enabled=false`, then check that no instance or Elastic IP is left.
 - [x] **Ansible over SSM:** decided: SSH tunnelled through SSM with a laptop-only key (decision 36). fw-ips gets the public key once through SSM, because it was launched without a key pair.
 - [x] **Suricata upkeep:** daily `suricata-update.timer` with `reload-rules`; the refusal was a test run replacing the command socket (decision 38).
-- [ ] **Default security group on the fw-ips ENI:** the ENI carries `mailbridge-lab-fw` and `default`. `default` has no rules, so it grants nothing, but §4 says sg-fw only. Remove it in a small separate change.
+- [~] **Default security group on the fw-ips ENI:** the ENI carries `mailbridge-lab-fw` and `default`. `default` has no rules, so it grants nothing, but §4 says sg-fw only. Fixed in code by decision 42; done once the apply is verified.
 - [ ] **VPN client exits on the laptop:** the `openvpn` client process ended twice on 2026-11-02 (about 11:40, and after a server restart) instead of reconnecting. Read the client's last log lines next time it happens.
 - [ ] **Own package mirror or proxy:** Marko wants to discuss this later. Parked until Tier 1 is finished; no design change yet.
 - [ ] **SSH over the VPN:** proposed as a daily-use path from the admin pool, with SSM kept for emergencies. Discuss after 1.9b; no design change yet.

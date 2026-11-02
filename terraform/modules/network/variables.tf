@@ -34,6 +34,11 @@ variable "fw_private_ip" {
   default     = "10.0.1.10"
 }
 
+variable "fw_security_group_ids" {
+  description = "Every security group on the fw-ips ENI (sg-fw only, ARCHITECTURE.md §4)."
+  type        = list(string)
+}
+
 variable "vpn_cidr" {
   description = "VPN pools, routed to fw-ips rather than NATed so hosts see real client IPs."
   type        = string
