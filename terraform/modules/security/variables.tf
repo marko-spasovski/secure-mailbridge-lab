@@ -14,11 +14,6 @@ variable "vpc_cidr" {
   type        = string
 }
 
-variable "fw_eni_id" {
-  description = "fw-ips network interface that receives sg-fw."
-  type        = string
-}
-
 variable "fw_private_ip" {
   description = "fw-ips address, where private hosts send DNS queries (Unbound)."
   type        = string

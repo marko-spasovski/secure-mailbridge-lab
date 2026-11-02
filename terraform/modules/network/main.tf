@@ -53,6 +53,9 @@ resource "aws_network_interface" "fw" {
   private_ips       = [var.fw_private_ip]
   source_dest_check = false # fw-ips forwards packets not addressed to itself.
 
+  # The full list, so AWS doesn't add the VPC default group (decision 42).
+  security_groups = var.fw_security_group_ids
+
   tags = { Name = "${var.name}-fw-ips" }
 }
 

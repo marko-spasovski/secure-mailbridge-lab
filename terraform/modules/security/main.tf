@@ -23,7 +23,7 @@ locals {
 }
 
 resource "aws_security_group" "fw" {
-  #checkov:skip=CKV2_AWS_5:Attached by aws_network_interface_sg_attachment, which checkov does not recognise.
+  #checkov:skip=CKV2_AWS_5:Attached in modules/network through the ENI's security_groups, which checkov can't follow across modules.
   name        = "${var.name}-fw"
   description = "fw-ips: OpenVPN entry point and router for private subnets"
   vpc_id      = var.vpc_id
@@ -55,11 +55,6 @@ resource "aws_security_group" "siem" {
   name        = "${var.name}-siem"
   description = "siem: Wazuh agents from the VPC, dashboard from admin pool"
   vpc_id      = var.vpc_id
-}
-
-resource "aws_network_interface_sg_attachment" "fw" {
-  security_group_id    = aws_security_group.fw.id
-  network_interface_id = var.fw_eni_id
 }
 
 # --- Ingress ---
