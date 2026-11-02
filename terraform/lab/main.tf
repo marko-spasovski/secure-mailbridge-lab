@@ -25,7 +25,7 @@ module "compute" {
   fw_ami_id      = var.fw_ami_id
   fw_eni_id      = module.network.fw_eni_id
   fw_private_ip  = module.network.fw_private_ip
-  ssh_public_key = file(pathexpand(var.ssh_public_key_path))
+  ssh_public_key = var.ssh_public_key
 }
 
 # The zone belongs to the persistent stack (task 1.2), so lab only looks it up.

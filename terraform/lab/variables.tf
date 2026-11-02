@@ -13,8 +13,7 @@ variable "fw_ami_id" {
   type        = string
 }
 
-variable "ssh_public_key_path" {
-  description = "Public half of the laptop-only Ansible key (decision 36)."
+variable "ssh_public_key" {
+  description = "Contents of ~/.ssh/mailbridge-lab-ansible.pub, the public half of the laptop-only Ansible key (decision 36). Passed as a value, not a path, so CI and other machines can evaluate the config."
   type        = string
-  default     = "~/.ssh/mailbridge-lab-ansible.pub"
 }
