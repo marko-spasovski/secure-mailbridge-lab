@@ -75,7 +75,7 @@ data "aws_iam_policy_document" "ec2_assume" {
 
 resource "aws_iam_role" "fw" {
   name               = "${var.name}-fw-ips"
-  description        = "fw-ips instance role: SSM access only"
+  description        = "fw-ips instance role: SSM agent, and reads its own /vpn/fw-ips/* parameters"
   assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
 }
 
@@ -84,6 +84,10 @@ resource "aws_iam_role_policy_attachment" "fw_ssm_min" {
   policy_arn = aws_iam_policy.ssm_min.arn
 }
 
+# Looked up rather than written down, so the public repo holds no account ID.
+data "aws_caller_identity" "current" {}
+data "aws_region" "current" {}
+
 # fw-ips pulls its own VPN files and nothing else (decisions 22, 39).
 # /vpn/ca/* stays unreadable to every instance.
 data "aws_iam_policy_document" "fw_own_secrets" {
@@ -91,7 +95,7 @@ data "aws_iam_policy_document" "fw_own_secrets" {
     sid       = "ReadOwnSecrets"
     effect    = "Allow"
     actions   = ["ssm:GetParameter"]
-    resources = ["arn:aws:ssm:eu-central-1:*:parameter/vpn/fw-ips/*"]
+    resources = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/vpn/fw-ips/*"]
   }
 }
 

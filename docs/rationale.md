@@ -571,3 +571,15 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** Decision 7 kept dependencies flowing one way (network to security). Now `modules/network` takes sg-fw's ID from `modules/security`, which takes `vpc_id` from network. Terraform allows this because it orders individual resources, not modules: VPC, then sg-fw, then the ENI, with no loop. checkov can't follow the group across modules, so sg-fw keeps its `CKV2_AWS_5` skip with a new reason.
 
 **Verify once built.** The plan shows `1 to change` (the ENI, in place, removing only `default`), the attachment as no longer managed, and `0 to destroy`. After the apply, `aws ec2 describe-network-interfaces --network-interface-ids <eni> --query 'NetworkInterfaces[].Groups[].GroupName' --output text` prints only `mailbridge-lab-fw`; the VPN ping to 10.0.1.10 still works; the next plan shows no changes.
+
+## 43. Account ID in the fw-ips grant (2026-11-02)
+
+**Problem.** The fw-ips grant allowed `ssm:GetParameter` on `arn:aws:ssm:eu-central-1:*:parameter/vpn/fw-ips/*`. The `*` in the account field matches a parameter of that name in any account, so the grant was wider than it needed to be. An IAM policy can't reach another account's parameters without that account's consent, so this was tidiness, not an open hole. The role description still said "SSM access only", although decision 39 added the parameter grant.
+
+**Options.** A: look the account ID and region up with the `aws_caller_identity` and `aws_region` data sources. B: write the account ID into the code or a committed `tfvars`. C: pass it as a variable from the untracked `terraform.tfvars`.
+
+**Chosen: A.** The ARN names exactly this account, and nothing has to be written down. B puts an account ID in a public repo, which CLAUDE.md rules out. C works, but it's one more untracked value to keep in sync, and Terraform already knows which account it's running in. The description now says the role runs the SSM agent and reads its own `/vpn/fw-ips/*` parameters.
+
+**Trade-off accepted.** The account ID appears in plan output and state, which are local and gitignored. Plans pasted into docs or PRs must keep it masked.
+
+**Verify once built.** The plan shows 2 changed in place (the description and the policy `Resource`) and nothing replaced. `aws iam get-role-policy --role-name mailbridge-lab-fw-ips --policy-name fw-ips-read-own-secrets` shows the account ID in the ARN. The IAM simulator allows `/vpn/fw-ips/*` and still denies `/vpn/ca/key`. A third Ansible run reports `changed=0`, so fw-ips can still pull its files.
