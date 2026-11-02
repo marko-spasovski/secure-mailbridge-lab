@@ -4,8 +4,8 @@ variable "name" {
   default     = "mailbridge-lab"
 }
 
-variable "fw_ami_id" {
-  description = "Ubuntu 24.04 LTS x86_64 AMI from Canonical, pinned so a plan never replaces fw-ips on its own."
+variable "ubuntu_ami_id" {
+  description = "Ubuntu 24.04 LTS x86_64 AMI from Canonical for every host, pinned so a plan never replaces a host on its own."
   type        = string
 }
 
@@ -30,8 +30,30 @@ variable "ssh_public_key" {
   type        = string
 }
 
-variable "fw_enabled" {
-  description = "false removes the fw-ips instance and Elastic IP between sessions, so nothing idle is billed (decision 41). IAM and the key pair stay; they're free."
+variable "hosts_enabled" {
+  description = "Session switch: false removes every session host (fw-ips and its Elastic IP, db) between sessions, so nothing idle is billed (decision 41). IAM and the key pair stay; they're free."
   type        = bool
   default     = true
+}
+
+variable "db_instance_type" {
+  description = "db instance type (ARCHITECTURE.md §3)."
+  type        = string
+  default     = "t3.micro"
+}
+
+variable "db_subnet_id" {
+  description = "Data subnet from the network module."
+  type        = string
+}
+
+variable "db_private_ip" {
+  description = "db's fixed address, which the docs and later pg_hba on db refer to."
+  type        = string
+  default     = "10.0.4.10"
+}
+
+variable "db_security_group_id" {
+  description = "sg-db from the security module."
+  type        = string
 }

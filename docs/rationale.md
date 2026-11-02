@@ -667,3 +667,15 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** db is upgraded by its role instead of at first boot, unlike fw-ips; each method fits its host, because fw-ips has internet at boot and db doesn't. The first `site.yml` run on a fresh session takes longer while it waits for db to register. `wait_for_connection` has a timeout, so a broken fw-ips fails the db play with a clear message instead of hanging.
 
 **Verify once built.** After the apply, `cloud-init status` on db reports `done`, not `error`. The first `site.yml` shows the `fw_ips` play, then the `db` play waiting and connecting. `apt list --upgradable` on db is empty after the run, and the second run reports `changed=0`.
+
+## 51. One session switch for every host (2026-11-02)
+
+**Problem.** Decision 41's `fw_enabled` removed fw-ips between sessions. db (and later app, proxy and siem) also bill while idle and must go at the same time. fw-ips's AMI variable was also named for one host.
+
+**Options.** A: rename the switch to `hosts_enabled` and put every session host behind it. B: one switch per host (`fw_enabled`, `db_enabled`, ...). C: keep the name `fw_enabled` and reuse it for db.
+
+**Chosen: A.** A session needs all of its hosts or none, so one switch matches how the lab is used, and a teardown can't miss a host. B allows partial states nobody needs and one more variable to forget per host. C works, but the name would lie about what it removes. `fw_ami_id` becomes `ubuntu_ami_id` for the same reason: every host runs the same pinned image, and a second variable would let them drift.
+
+**Trade-off accepted.** A single host can't be removed on its own with the switch; that would take a targeted plan, which the lab doesn't need. Renaming a Terraform variable doesn't touch state, because resource addresses (`aws_instance.fw[0]`) don't contain variable names. The untracked `terraform.tfvars` has to be renamed too, or Terraform warns about an undeclared variable and fw-ips loses its AMI.
+
+**Verify once built.** With fw-ips running, the plan after the rename shows only db's resources to add, nothing to change or destroy on fw-ips. At the end of the session, `-var hosts_enabled=false` shows fw-ips's 4 resources plus db's instance to destroy, and IAM stays.

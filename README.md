@@ -378,7 +378,7 @@ dig +short @10.0.1.10 mail.<domain>   # expect 10.0.2.10
 
 ```bash
 # Removes the EC2 hosts, the Elastic IP and the vpn record; the free network layer stays
-terraform -chdir=terraform/lab plan -var fw_enabled=false -out=off.tfplan
+terraform -chdir=terraform/lab plan -var hosts_enabled=false -out=off.tfplan
 terraform -chdir=terraform/lab apply off.tfplan
 ```
 
