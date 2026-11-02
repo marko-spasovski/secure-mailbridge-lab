@@ -1,0 +1,28 @@
+---
+# Runs first, so no apt task in this role ever uses plain HTTP.
+- name: Use the regional Ubuntu mirror over HTTPS
+  ansible.builtin.copy:
+    src: ubuntu.sources
+    dest: /etc/apt/sources.list.d/ubuntu.sources
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Refresh the package lists
+
+# Refresh now, not at the end, so the next apt task sees the new sources.
+- name: Refresh before any package is installed
+  ansible.builtin.meta: flush_handlers
+
+# Ubuntu's default, enforced so a change shows up as drift.
+- name: Install unattended-upgrades
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: present
+
+- name: Apply security updates automatically
+  ansible.builtin.copy:
+    src: 20auto-upgrades
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    owner: root
+    group: root
+    mode: "0644"

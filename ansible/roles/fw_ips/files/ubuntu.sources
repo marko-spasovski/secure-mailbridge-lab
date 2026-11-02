@@ -1,0 +1,15 @@
+# Managed by Ansible (fw_ips role). ARCHITECTURE section 3: apt over HTTPS
+# from the regional mirror, so port 80 is never needed. Packages are still
+# verified by the archive signature; HTTPS adds privacy and blocks tampering
+# with the package lists in transit.
+Types: deb
+URIs: https://eu-central-1.ec2.archive.ubuntu.com/ubuntu/
+Suites: noble noble-updates noble-backports
+Components: main universe restricted multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+Types: deb
+URIs: https://eu-central-1.ec2.archive.ubuntu.com/ubuntu/
+Suites: noble-security
+Components: main universe restricted multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
