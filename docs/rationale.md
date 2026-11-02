@@ -507,3 +507,17 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** A large file tied to Suricata 7.0.3. After a major upgrade, the new upstream default is compared and our three edits carried over by hand. `HOME_NET` is written in the file rather than coming from a variable.
 
 **Verify once built.** `--check --diff` reports no change on a host built by hand; `suricata -T` passes on the installed file; `git log -p` on the file shows the three edits in one commit.
+
+## 38. Suricata rule updates and the reload refusal (2026-11-02)
+
+**Problem.** ET Open was downloaded once and never updated. On 2026-11-01, `suricatasc -c reload-rules` was refused, so new custom rules needed a restart. A restart is costly here: Suricata fails closed (decision 33) and loads 53,000 rules first, so forwarded VPN traffic stops for about 30 seconds.
+
+**Cause found.** With the default config, any `suricata -r <pcap>` run also opens a command socket at `/var/run/suricata-command.socket`. It replaces the daemon's socket file and leaves a dead one when it exits. From then on `reload-rules` and the unit's `ExecStop` get `Connection refused`. This was reproduced on fw-ips: the socket's inode changed and `suricatasc` was refused. With `--set unix-command.enabled=no` the socket stayed working. `suricata -T` doesn't touch the socket.
+
+**Options.** A: a daily systemd timer running `suricata-update` with `reload-rules`. B: the same timer with a restart. C: update by hand when needed.
+
+**Chosen: A.** `suricata-update` tests the new ruleset with `suricata -T` before installing it, and `reload-rules` then swaps rules in the running engine without dropping traffic. `Persistent=true` runs a missed update at the next boot, which matters because fw-ips is stopped between sessions. A random delay of up to an hour avoids fetching at the same minute every day. B pauses traffic daily for no gain, and C leaves the rules stale.
+
+**Trade-off accepted.** During an update the `-T` test loads ET Open a second time, about 500 MB, next to the running engine's 530 MB, on a host with 2 GB. A reload also holds the old and new engines briefly. A forced update on 2026-11-02 left 209 MB available at its lowest point: it works, but it's the tightest moment on this host and must be re-measured when the Wazuh agent arrives in 1.17, with t3.medium as the fallback. A ruleset that passes `-T` but behaves badly still loads automatically.
+
+**Verify once built.** `systemctl list-timers suricata-update.timer` shows the next run; a manual start of the service logs a download, a test and a reload; `suricatasc -c ruleset-reload-time` shows a new time; `suricatasc -c version` still answers.

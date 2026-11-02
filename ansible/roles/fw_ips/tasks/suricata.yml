@@ -70,3 +70,27 @@
     name: suricata
     enabled: true
     state: started
+
+- name: Install the daily rule update units
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/etc/systemd/system/{{ item }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - suricata-update.service
+    - suricata-update.timer
+  notify: Reload systemd units
+
+# The timer must exist in systemd before it can be enabled.
+- name: Load the new units
+  ansible.builtin.meta: flush_handlers
+
+# In check mode the unit file isn't really copied, so systemd can't find it.
+- name: Enable the daily rule update
+  ansible.builtin.systemd_service:
+    name: suricata-update.timer
+    enabled: true
+    state: started
+  ignore_errors: "{{ ansible_check_mode }}"
