@@ -643,3 +643,15 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** Until 1.14, the app→db network path is proven only on paper: the sg-db and data NACL rules were checked line by line against §4 in 1.4, but no packet has crossed them. If 1.14 fails, the cause could be in db or the network, and the layered checks below narrow it down.
 
 **Verify once built.** On db: `ss -ltn` shows PostgreSQL on 10.0.4.10:5432 (and loopback), and the `pg_hba` file allows only the app user to its database from 10.0.3.10/32 with `scram-sha-256`. A local login with the SSM value works. From the VPN admin pool, `nc -zv -w 3 10.0.4.10 5432` times out, and fw-ips logs the drop. In 1.14, `psql` from app connects. In 1.15, the same command from proxy times out.
+
+## 49. What happens to the database between sessions (2026-11-02)
+
+**Problem.** Decision 41 destroys every paid instance at the end of a session. fw-ips holds no state, but db keeps PostgreSQL's data on its root disk, so destroying the instance deletes the data. The underlying idea is the split between compute and state: servers should be disposable, while data has its own lifecycle on a separate volume or in backups.
+
+**Options.** A: accept an empty database each session until T2.3 brings backups and a restore. B: a separate EBS data volume (about 5 GB, about $0.50 a month) mounted at `/var/lib/postgresql` and reattached to each new instance. C: stop db between sessions instead of destroying it.
+
+**Chosen: A.** Tier 1 uses only test accounts in testing mode, so an empty database costs a minute of re-linking per account. Each session then proves that db builds from clean, the same way fw-ips does. T2.3 adds nightly `pg_dump` to S3 and a tested restore, and restoring at session start becomes a real recovery drill rather than a disk that never goes away. B is the production pattern, but it adds a volume lifecycle, a stack to own it, a mount in Ansible and a guard so `initdb` never runs over existing data, which is too much for the first private host. C goes back to a host carried by hand between sessions, the problem decision 41 removed.
+
+**Trade-off accepted.** Nothing in the database survives a session: app users, linked mailboxes and stored tokens are recreated each time. A Phase 2 scenario that needs data across several days would have to wait for T2.3 or bring B forward. This is revisited at 1.14 if re-linking proves a burden.
+
+**Verify once built.** After an end-of-session teardown, no db instance or volume is left (`aws ec2 describe-volumes` filtered by `Project=mailbridge-lab` is empty). At the next start, the `db` role creates the user and database again, and the login from decision 48 works with the same SSM password.
