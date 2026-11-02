@@ -13,7 +13,7 @@ it is verified, and the relevant doc section is updated.
 ## Current position
 
 - **Phase:** 1, Tier 1 on AWS (0.6 and 0.7 still open)
-- **Next task:** 1.6, the Terraform for fw-ips (instance, role, Elastic IP, `vpn` record), then the rebuild test. The `fw_ips` role covers everything built by hand (2026-11-02).
+- **Next task:** 1.13, the `db` role. fw-ips is in Terraform and Ansible and was rebuilt from code (2026-11-02). Delete the fallback AMI `mailbridge-lab-fw-ips-handbuilt-2026-11-02` and its snapshot when Marko approves.
 
 ## Open items
 
@@ -75,7 +75,7 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Verify: the 1.5a checks pass again; `terraform plan` reports no changes
 
 **fw-ips**
-- [ ] **1.6** Remove the `CKV2_AWS_5` skips as groups get attached. `modules/compute` and IAM: fw-ips instance, IMDSv2, encrypted gp3, `credit_specification = "standard"`, source/dest check off, Elastic IP and `vpn.<domain>` record · C
+- [x] **1.6** Rebuilt from code on 2026-11-02 and verified: second `terraform plan` shows no changes, the third Ansible run `changed=0`, packages and nftables identical to the hand-built host. Remove the `CKV2_AWS_5` skips as groups get attached. `modules/compute` and IAM: fw-ips instance, IMDSv2, encrypted gp3, `credit_specification = "standard"`, source/dest check off, Elastic IP and `vpn.<domain>` record · C
   - Note: roles use `mailbridge-lab-ssm-min`, never `AmazonSSMManagedInstanceCore` (decision 22)
   - Note: fw-ips is rebuilt from code with IAM and the Elastic IP imported, and an AMI of the old instance as fallback (decision 40)
   - Note: instances get the Ansible public key through `aws_key_pair`; the private key stays on the laptop (decision 36)
