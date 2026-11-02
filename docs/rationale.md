@@ -583,3 +583,15 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** The account ID appears in plan output and state, which are local and gitignored. Plans pasted into docs or PRs must keep it masked.
 
 **Verify once built.** The plan shows 2 changed in place (the description and the policy `Resource`) and nothing replaced. `aws iam get-role-policy --role-name mailbridge-lab-fw-ips --policy-name fw-ips-read-own-secrets` shows the account ID in the ARN. The IAM simulator allows `/vpn/fw-ips/*` and still denies `/vpn/ca/key`. A third Ansible run reports `changed=0`, so fw-ips can still pull its files.
+
+## 44. Deploying custom rule changes (2026-11-02)
+
+**Problem.** A change to `local.rules` notified `Restart Suricata`. Suricata fails closed, so every restart stops forwarded VPN traffic while it loads, about 30 seconds with ET Open. Nothing checked the file first. `init-failure-fatal` isn't set, so Suricata skips a rule that doesn't parse and starts anyway: the rule we think protects the proxy would silently not exist, and only `suricata.log` would say so. `suricata.yaml` was already validated with `-T`. Decision 38 had moved ET Open updates to `reload-rules`, and the handler's comment still blamed the earlier refusal on an unknown cause.
+
+**Options.** A: validate the new file with `suricata -T -S` through `copy`'s `validate`, and notify a handler that runs `suricatasc -c reload-rules`. B: keep the restart and only add validation. C: leave it, because nothing sits behind fw-ips yet.
+
+**Chosen: A.** Validation turns a silent skip into a failed Ansible task, while the running engine keeps its old rules. A test on fw-ips confirmed `-T` exits 1 on a rule that doesn't parse and 0 on the current file. `-S` loads only the new file, so the test checks the custom rules without touching the live config. `--set unix-command.enabled=no` keeps the test from replacing the daemon's socket, which is what caused the decision 38 refusal. The reload swaps rules with no pause, the same mechanism the daily ET Open update uses. B keeps a pause that will hit real users once `proxy` exists. C leaves the trap in place for Phase 2, when rules change under time pressure.
+
+**Trade-off accepted.** `suricatasc` returns exit code 0 even when the engine refuses, so the handler reads `"return": "OK"` from the reply. On a fresh host both handlers fire, and the reload runs after the restart. It retries for up to two minutes until the new process opens its socket. The extra reload is harmless.
+
+**Verify once built.** A rule change makes `site.yml` show `Install the custom rules` changed and `Reload Suricata rules` run, with no `Restart Suricata`. `sudo suricatasc -c uptime` keeps counting instead of resetting, which shows the engine and its traffic never stopped, and `sudo suricatasc -c ruleset-stats` shows 0 failed. A deliberately broken rule fails the task at `validate`, and the live rules stay unchanged.
