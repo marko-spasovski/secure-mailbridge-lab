@@ -1,0 +1,6 @@
+---
+- name: Configure fw-ips
+  hosts: fw_ips
+  become: true
+  roles:
+    - fw_ips

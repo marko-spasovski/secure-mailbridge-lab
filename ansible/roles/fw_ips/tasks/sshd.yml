@@ -1,0 +1,14 @@
+---
+# Ubuntu 24.04 starts sshd through ssh.socket: systemd opens the listening
+# port, and sshd-socket-generator builds it from ListenAddress. So a change
+# needs daemon-reload and a socket restart, not only a service restart.
+- name: Install the loopback-only sshd drop-in
+  ansible.builtin.copy:
+    src: sshd-10-loopback.conf
+    dest: /etc/ssh/sshd_config.d/10-loopback.conf
+    owner: root
+    group: root
+    mode: "0644"
+    # Syntax-check the new file before it replaces anything.
+    validate: /usr/sbin/sshd -t -f %s
+  notify: Apply sshd listen change
