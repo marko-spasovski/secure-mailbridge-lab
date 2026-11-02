@@ -38,6 +38,8 @@ jobs:
       # No backend or AWS credentials: this checks the code only.
       - run: terraform -chdir=terraform/lab init -backend=false -input=false -lockfile=readonly
       - run: terraform -chdir=terraform/lab validate
+      - run: terraform -chdir=terraform/persistent init -backend=false -input=false -lockfile=readonly
+      - run: terraform -chdir=terraform/persistent validate
 
   tflint:
     name: tflint
