@@ -26,8 +26,7 @@
     - common
     - db
 
-# Same pattern as db (decision 50). The app role comes with the image
-# (task 1.14).
+# Same pattern as db (decision 50).
 - name: Configure app
   hosts: app
   become: true
@@ -41,3 +40,4 @@
       ansible.builtin.setup:
   roles:
     - common
+    - app

@@ -1,0 +1,12 @@
+---
+# The Mailbridge commit the image and db-roles.sql come from (decision 57).
+# Change all three together: a new image can bring new tables that
+# files/db-roles.sql must grant on (decision 54).
+app_source_commit: bb5c84f8e8721d430db6973c61a7ccd4d0aa6712
+# Digest of that commit's image in ECR, printed by docker push. Public
+# information; the registry, which contains the account ID, is worked out on
+# the host (ARCHITECTURE.md section 3, pinned by digest).
+app_image_digest: "sha256:8f587cf58267ef038539f55bf56d27b9c5b66cad3bcdd5227d67fd81e3f91e52"
+
+# Anyone who reaches the app through the VPN may sign up while this is true.
+app_allow_registration: true

@@ -1,0 +1,22 @@
+#!/bin/sh
+# Managed by Ansible (app role). Decisions 54, 56.
+# Creates or updates the schema as the owner. Idempotent: applied migrations
+# are skipped, and an advisory lock stops two runs migrating at once.
+. /usr/local/lib/mailbridge/common.sh
+
+# The owner password exists only in this step and the grants step.
+# migrate.js loads the app's full config, which in production also requires
+# the session secret and token key, although it uses neither.
+POSTGRES_PASSWORD=$(ssm /mailbridge/db-password)
+SESSION_SECRET=$(ssm /mailbridge/session-secret)
+TOKEN_ENCRYPTION_KEY=$(ssm /mailbridge/token-encryption-key)
+export POSTGRES_PASSWORD SESSION_SECRET TOKEN_ENCRYPTION_KEY
+
+# -e NAME without a value copies it from this environment, so no value is
+# in argv. $hardening is split into words on purpose.
+# shellcheck disable=SC2086
+exec docker run $hardening --name mailbridge-migrate \
+  --env-file /etc/mailbridge/app.conf \
+  -e POSTGRES_USER=mailbridge -e POSTGRES_PASSWORD \
+  -e SESSION_SECRET -e TOKEN_ENCRYPTION_KEY \
+  "$image" node dist/scripts/migrate.js
