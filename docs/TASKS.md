@@ -13,7 +13,25 @@ it is verified, and the relevant doc section is updated.
 ## Current position
 
 - **Phase:** 1, Tier 1 on AWS (0.6 and 0.7 still open)
-- **Next task:** 1.13, the `db` role. fw-ips is in Terraform and Ansible and was rebuilt from code (2026-11-02).
+- **Next task:** the "Before db" list below, then 1.13, the `db` role. fw-ips is in Terraform and Ansible and was rebuilt from code (2026-11-02).
+
+## Before db (agreed 2026-11-02)
+
+1. [ ] **Session routine and second rebuild from code.** Commands, from the repo root:
+   - `aws login`, then `aws sts get-caller-identity --query Arn --output text` (ends in `marko-admin`)
+   - `ssh-add ~/.ssh/mailbridge-lab-ansible`
+   - Claude saves the plan: `terraform -chdir=terraform/lab plan -out=<scratchpad>/on.tfplan` (expect 4 to add: instance, Elastic IP, association, `vpn` record). Marko runs `! cd terraform/lab && terraform apply <scratchpad>/on.tfplan`
+   - New ID into the inventory: `sed -i "s/ansible_host: i-[0-9a-f]*/ansible_host: $(terraform -chdir=terraform/lab output -raw fw_instance_id)/" ansible/inventories/aws/hosts.yml`
+   - Wait for first boot: `cd ansible && ansible fw_ips -m command -a 'cloud-init status --wait'` (expect `status: done`)
+   - `ansible-playbook site.yml`, then again (expect `changed=0`)
+   - Connect the VPN; `ping -c 3 10.0.1.10`; `dig +short @10.0.1.10 mail.<domain>` (expect `10.0.2.10`)
+   - `terraform -chdir=terraform/lab plan` (expect no changes)
+   - If all pass: delete the fallback AMI and its snapshot, with Marko's OK
+2. [ ] **Small fixes, one PR each:** remove `default` from the fw-ips ENI (§4); tighten the fw-ips role description and use the account ID instead of `*` in its grant; rule 1000004 `flow:to_server`, written by Marko and reviewed by Claude.
+3. [ ] **Inventory from Terraform:** decide between the `aws_ec2` dynamic inventory and generating `hosts.yml` from `terraform output`, before more hosts make hand-edited IDs error-prone.
+4. [ ] **Where `db`'s password lives** (part of 1.2): Terraform stores parameter values in state, so decide how `/mailbridge/db-password` is created. Consider importing the hand-built `persistent` pieces at the same time.
+
+End every session with: Claude saves `terraform -chdir=terraform/lab plan -var fw_enabled=false -out=<scratchpad>/off.tfplan` (expect 4 to destroy), Marko disconnects the VPN and runs the apply, Claude confirms no instance, Elastic IP or volume is left.
 
 ## Open items
 
