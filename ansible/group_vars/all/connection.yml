@@ -1,0 +1,15 @@
+---
+# How Ansible reaches every host (decision 36): SSH carried inside an SSM
+# session, so port 22 is never opened to any network.
+ansible_user: ubuntu
+ansible_ssh_private_key_file: ~/.ssh/mailbridge-lab-ansible
+# Pin the interpreter so a second Python on the host never changes it.
+ansible_python_interpreter: /usr/bin/python3
+# IdentitiesOnly: offer only the key above, not every key in the agent.
+# accept-new: trust a host key on first connect, refuse it if it changes.
+# %h is ansible_host (an instance ID), %p is the port (22).
+ansible_ssh_common_args: >-
+  -o IdentitiesOnly=yes
+  -o StrictHostKeyChecking=accept-new
+  -o ProxyCommand="aws ssm start-session --region eu-central-1
+  --target %h --document-name AWS-StartSSHSession --parameters portNumber=%p"

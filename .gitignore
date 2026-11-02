@@ -42,3 +42,6 @@ terraform/lab/imports.tf
 
 # Real domain name (see ansible/group_vars/all/domain.yml.example)
 ansible/group_vars/all/domain.yml
+
+# Real instance IDs (see ansible/inventories/aws/hosts.yml.example)
+ansible/inventories/aws/hosts.yml
