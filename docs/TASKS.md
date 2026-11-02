@@ -13,7 +13,7 @@ it is verified, and the relevant doc section is updated.
 ## Current position
 
 - **Phase:** 1, Tier 1 on AWS (0.6 and 0.7 still open)
-- **Next task:** 1.14, the `app` host and role. 1.13 (`db`) is done (2026-11-02). Mailbridge is being prepared for deployment in its own repo (`docs/deployment.md` there); its env vars, secret formats and the ADR 0008 role question feed 1.14.
+- **Next task:** 1.15, the `proxy` host and role (Nginx, TLS with Let's Encrypt staging, ModSecurity v3 + CRS). 1.13 (`db`) and 1.14 (`app`) are done. The app's Nginx requirements are in Mailbridge's `docs/deployment.md` §3: `X-Forwarded-Proto`, `X-Forwarded-For`, `Host`, request bodies of at least 800 KB, proxy timeouts of at least 60 s, the CRS JSON body processor.
 
 ## Before db (agreed 2026-11-02)
 
@@ -46,7 +46,7 @@ End every session with: Claude saves `terraform -chdir=terraform/lab plan -var h
 - [ ] **VPN client exits on the laptop:** the `openvpn` client process ended twice on 2026-11-02 (about 11:40, and after a server restart) instead of reconnecting. Read the client's last log lines next time it happens.
 - [ ] **Own package mirror or proxy:** Marko wants to discuss this later. Parked until Tier 1 is finished; no design change yet.
 - [ ] **SSH over the VPN:** proposed as a daily-use path from the admin pool, with SSM kept for emergencies. Discuss after 1.9b; no design change yet.
-- [~] **Mailbridge repo location:** a separate repo, being prepared for deployment (inventory and gaps in its `docs/deployment.md`, 2026-11-02). Still to decide in 1.14: where the image is built and pushed, the OAuth redirect URIs (the app uses `/accounts/callback/{gmail,outlook}`, not §6's `/oauth/callback`), `/mailbridge/session-secret`, and one or two DB roles (the app's ADR 0008).
+- [x] **Mailbridge repo location:** a separate repo, prepared for deployment on 2026-11-02 (its `docs/deployment.md`); the image is built from a clean export of a merged commit and pushed by hand (decision 57). OAuth secrets and redirect URI registration remain for 1.19.
 
 ---
 
@@ -132,11 +132,12 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Verified 2026-11-02: second `site.yml` run `changed=0` on both hosts; PostgreSQL listens on 10.0.4.10 and 127.0.0.1 only; the SSM password logs in as `mailbridge` and a wrong one fails; `postgres` over TCP and `mailbridge` to another database get `no pg_hba.conf entry`; the role isn't superuser and can't create roles or databases; the password is stored as `SCRAM-SHA-256`; the value appears 0 times in the `-v` run log and the PostgreSQL logs; the IAM simulator allows only `/mailbridge/db-password`. From the admin pool, with a route to 10.0.4.0/24 added by hand (the pool gets no such route), `nc` to 5432 times out and fw-ips logs `FW-DROP` from 10.8.1.10
   - Note: the laptop needs the collections in `ansible/requirements.yml` (`ansible-galaxy collection install -r requirements.yml`)
   - Verify (decision 48, db side only): PostgreSQL listens on 10.0.4.10:5432; `pg_hba` allows only the app user from 10.0.3.10/32 with `scram-sha-256`; a local login with the SSM value works; `nc -zv -w 3 10.0.4.10 5432` from the VPN admin pool times out and fw-ips logs the drop; the IAM simulator allows only `/mailbridge/db-password`. "Connect from app" moves to 1.14 and "refused from proxy" to 1.15
-- [ ] **1.14** `app` role: Mailbridge from ECR pinned by digest, listening on 3000, secrets from SSM · C
+- [x] **1.14** Built from code on 2026-11-03 and verified, except "reachable from proxy", which is checked in 1.15 (decision 48). `app` role: Mailbridge from ECR pinned by digest, listening on 3000, secrets from SSM · C
   - Note: two DB roles (decision 54): db creates `mailbridge_app`; app runs migrate as the owner, applies `db-roles.sql` with `psql`, then runs the app as `mailbridge_app`. Secrets generated in `persistent` (decision 55); OAuth secrets wait for 1.19
   - Note: secrets reach the containers through start scripts under systemd with `--rm` (decision 56); the image is built and pushed by hand for now, automated in T2.2 (decision 57). The app host and its role are in `modules/compute/app.tf`
   - Note: db creates `mailbridge_app` and sets both passwords with `set-db-password <role> <parameter>`; `pg_hba` allows both roles from 10.0.3.10 and loopback only; app gets the `common` baseline in `site.yml`
   - Note: image `bb5c84f` pushed 2026-11-03 by hand (decision 57): one OCI manifest, about 90 MB; ECR's basic scan reports 5 HIGH, all in Debian base packages (zlib, util-linux, glibc), matching the app's Trivy result of 0 fixable HIGH/CRITICAL. The `app` role pins the digest in `defaults/main.yml`, with `db-roles.sql` from the same commit
+  - Verified 2026-11-03: third `site.yml` run `changed=0` on all hosts; `/healthz` and `/health` (DB, as `mailbridge_app`) return 200; the container runs the pinned digest with `POSTGRES_USER=mailbridge_app` and the owner password 0 times in its env; no secret in any command line; IMDS from inside the container times out (hop limit 1); as `mailbridge_app`, `DROP TRIGGER audit_events_guard_row` gets "must be owner", `UPDATE audit_events`, `CREATE TABLE`, `TRUNCATE` and `pgmigrations` get "permission denied", `ALTER TABLE` gets "must be owner"; `systemctl stop` leaves `Result=success` and 0 containers; from the admin pool with a hand-added route, port 3000 times out and fw-ips logs `FW-DROP`. Fixed on the way: `ExecStop` failed on a container `--rm` had already removed (PR 46)
   - Verify: `docker inspect` shows the pinned digest; port 3000 reachable from proxy, unreachable from the VPN directly; `psql` to 10.0.4.10 as the app user connects (decision 48)
 - [ ] **1.15** `proxy` role: Nginx, TLS, rate limit, ModSecurity v3 + CRS, `certbot-dns-route53` (staging) · C
   - Verify: `curl -k https://mail.<domain>` over VPN returns 200; `?id=1' OR '1'='1` gets 403 and is in the audit log; `nc -zv -w 3 10.0.4.10 5432` from proxy times out (decision 48)
