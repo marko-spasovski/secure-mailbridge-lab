@@ -1,0 +1,136 @@
+---
+# Mailbridge in Docker, task 1.14 (decisions 54, 56, 57). Runs after the
+# common role, which provides apt over HTTPS and the AWS CLI.
+
+- name: Check that the image digest is set
+  ansible.builtin.assert:
+    that: app_image_digest is match('^sha256:[0-9a-f]{64}$')
+    fail_msg: Set app_image_digest to the digest docker push printed (decision 57).
+    quiet: true
+
+# All from the Ubuntu archive, no extra package source (as in decision 33).
+# The credential helper lets Docker pull from ECR with the instance role;
+# psql applies the grants (decision 54).
+- name: Install Docker, the ECR credential helper and psql
+  ansible.builtin.apt:
+    name:
+      - docker.io
+      - amazon-ecr-credential-helper
+      - postgresql-client-16
+    state: present
+
+# Container output goes to journald, where the Wazuh agent reads it (1.17).
+- name: Send container logs to journald
+  ansible.builtin.copy:
+    content: |
+      {
+        "log-driver": "journald"
+      }
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Docker
+
+- name: Enable and start Docker
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Create root's Docker config directory
+  ansible.builtin.file:
+    path: /root/.docker
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# No registry password is stored: the helper asks the instance role.
+- name: Use the ECR credential helper for pulls
+  ansible.builtin.copy:
+    src: docker-config.json
+    dest: /root/.docker/config.json
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Create the config and library directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/mailbridge
+    - /usr/local/lib/mailbridge
+
+# Settings only; secrets come from SSM at each start (decision 56).
+- name: Install the app settings
+  ansible.builtin.template:
+    src: app.conf.j2
+    dest: /etc/mailbridge/app.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Mailbridge
+
+- name: Pin the image digest
+  ansible.builtin.template:
+    src: image-digest.j2
+    dest: /etc/mailbridge/image-digest
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Mailbridge
+
+# From the app repo at app_source_commit (decision 54).
+- name: Install the runtime role grants
+  ansible.builtin.copy:
+    src: db-roles.sql
+    dest: /etc/mailbridge/db-roles.sql
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Mailbridge
+
+- name: Install the shared script settings
+  ansible.builtin.copy:
+    src: mailbridge-common.sh
+    dest: /usr/local/lib/mailbridge/common.sh
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Mailbridge
+
+# Root only: they read secrets, so no other user may run or change them.
+- name: Install the start scripts
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/usr/local/sbin/{{ item }}"
+    owner: root
+    group: root
+    mode: "0700"
+  loop:
+    - mailbridge-pull
+    - mailbridge-migrate
+    - mailbridge-grants
+    - mailbridge-run
+  notify: Restart Mailbridge
+
+- name: Install the Mailbridge unit
+  ansible.builtin.copy:
+    src: mailbridge.service
+    dest: /etc/systemd/system/mailbridge.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Mailbridge
+
+- name: Enable and start Mailbridge
+  ansible.builtin.systemd_service:
+    name: mailbridge
+    enabled: true
+    state: started
+    daemon_reload: true

@@ -1,0 +1,10 @@
+# Managed by Ansible (app role). Decision 56.
+# Settings only, never secrets: the start scripts add those from SSM.
+NODE_ENV=production
+PUBLIC_ORIGIN=https://mail.{{ domain }}
+TRUST_PROXY=1
+LOG_LEVEL=info
+POSTGRES_HOST=10.0.4.10
+POSTGRES_PORT=5432
+POSTGRES_DB=mailbridge
+ALLOW_REGISTRATION={{ app_allow_registration | string | lower }}

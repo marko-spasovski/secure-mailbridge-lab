@@ -1,0 +1,6 @@
+#!/bin/sh
+# Managed by Ansible (app role). Decision 57.
+# Pulls the pinned image. The ECR credential helper gets a short-lived token
+# from the instance role, so no registry password is stored.
+. /usr/local/lib/mailbridge/common.sh
+exec docker pull --quiet "$image"

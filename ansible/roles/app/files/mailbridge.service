@@ -1,0 +1,23 @@
+# Managed by Ansible (app role). Decision 56.
+[Unit]
+Description=Mailbridge (migrate, grant, run)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+# Pull first, so a slow download doesn't count against the app's start.
+ExecStartPre=/usr/local/sbin/mailbridge-pull
+ExecStartPre=/usr/local/sbin/mailbridge-migrate
+ExecStartPre=/usr/local/sbin/mailbridge-grants
+ExecStart=/usr/local/sbin/mailbridge-run
+# docker stop sends SIGTERM; the app exits within 8 s, before the 10 s kill.
+ExecStop=/usr/bin/docker stop --time 10 mailbridge
+# systemd restarts the app instead of Docker, so containers can use --rm.
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

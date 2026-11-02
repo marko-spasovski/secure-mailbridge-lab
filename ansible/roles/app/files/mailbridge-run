@@ -1,0 +1,21 @@
+#!/bin/sh
+# Managed by Ansible (app role). Decisions 54, 56.
+# Runs the app in the foreground, so systemd sees it exit and restarts it.
+. /usr/local/lib/mailbridge/common.sh
+
+# The runtime role only: the running app never holds the owner password.
+POSTGRES_PASSWORD=$(ssm /mailbridge/db-app-password)
+SESSION_SECRET=$(ssm /mailbridge/session-secret)
+TOKEN_ENCRYPTION_KEY=$(ssm /mailbridge/token-encryption-key)
+export POSTGRES_PASSWORD SESSION_SECRET TOKEN_ENCRYPTION_KEY
+
+# Published on app's VPC address only, where sg-app admits proxy alone.
+# The heap limit keeps Node under the container's 512 MB.
+# shellcheck disable=SC2086
+exec docker run $hardening --name mailbridge \
+  --env-file /etc/mailbridge/app.conf \
+  -e NODE_OPTIONS=--max-old-space-size=384 \
+  -e POSTGRES_USER=mailbridge_app -e POSTGRES_PASSWORD \
+  -e SESSION_SECRET -e TOKEN_ENCRYPTION_KEY \
+  -p 10.0.3.10:3000:3000 \
+  "$image"
