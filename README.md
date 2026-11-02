@@ -22,6 +22,7 @@
 - [CI quality gates](#ci-quality-gates)
 - [Documentation](#documentation)
 - [Scope and ethics](#scope-and-ethics)
+- [Author](#author)
 - [License](#license)
 
 ---
@@ -436,6 +437,14 @@ Branches follow Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`), one c
 ## Scope and ethics
 
 All attack tooling in this repository targets **only infrastructure I own and deploy myself**. The Google and Microsoft OAuth apps stay in testing mode with test accounts only, and no testing is aimed at Google, Microsoft or any third-party service.
+
+---
+
+## Author
+
+**Marko Spasovski**: built as a hands-on security engineering project covering network segmentation, inline IPS, SIEM, and attack and detection testing.
+
+[GitHub](https://github.com/rossiko22) · [LinkedIn](https://www.linkedin.com/in/marko-spasovski2/)
 
 ---
 
