@@ -770,3 +770,182 @@ Then task 1.13, `db`, the first private host. It needs:
 - a Terraform instance with `Role=db`
 - an instance role that may read only `/mailbridge/db-password`
 - the `db` role: PostgreSQL, the app user with the password pulled on the host, and access from `app` only
+
+## 2026-11-03
+
+### Today's topic: the first private hosts, and secrets that never leave the host
+
+This session started on the evening of 2026-11-02 and ran past midnight, so its decisions are dated 2026-11-02. It built the two hosts behind the firewall from code: `db` (task 1.13) and `app` (task 1.14). Along the way the lab got its first real data, its first container, a second AI agent working in the Mailbridge repo, and eleven decisions (47 to 57). The common thread is one question asked over and over: where does a secret travel, and who could see it on the way?
+
+### The big picture
+
+Before today, the lab was a network and one firewall. fw-ips had internet access from boot and held only its own VPN files. db and app are different in three ways. They are **private**: no route out except through fw-ips's NAT, so they depend on fw-ips being configured first. They hold **secrets that other hosts need**: the DB password is used by db and by app. And app is a **supply chain**: its code comes from another repository, through a registry, into a container.
+
+The build order in §13 (network → fw-ips → db → app → proxy → siem) exists so each host can be tested against its real dependency. db was tested against the real firewall, and app against the real database. The one test that couldn't happen yet ("proxy can reach app") moved to 1.15, where proxy will exist, instead of being faked with a throwaway VM (decision 48).
+
+### Part 1: The session routine proves the last session's fixes
+
+The session opened with the routine from decision 41: `terraform apply` with a saved plan, the dynamic inventory, cloud-init, two Ansible runs, the VPN checks. Two things were proven for the first time on a brand-new instance:
+
+- **`depends_on` on the Elastic IP association** (PR 26). The apply log showed the association starting only after `aws_instance.fw[0]: Creation complete`, and all 4 resources were created in one run. Last session the same apply failed with `IncorrectInstanceState`.
+- **The `aws_ec2` dynamic inventory** (decision 45). The new instance appeared under `fw_ips` without anyone editing a file.
+
+A small lesson came from `dig`: the docs write `mail.<domain>`, and typing that literally in zsh is a parse error, because `<` and `>` are redirection. Placeholders in docs are to be replaced, not typed. And the real name is the delegated subdomain, not the parent domain, which is why `mail.<parent>` returned nothing.
+
+### Part 2: Four decisions before writing any db code
+
+**How db gets its password (decision 47).** The password was created in SSM by Terraform (decision 46) and nobody has seen it. The cleanest path is the one fw-ips already uses (decision 39): db's own instance role reads exactly that one parameter, and a helper on the host uses it. The laptop and Ansible's output never hold it. The alternative, Ansible reading it on the laptop with `no_log`, fails the moment someone forgets `no_log` or runs `-vvv`.
+
+**How to verify db before app exists (decision 48).** PostgreSQL has three gates: the network (security group and NACL), the listener (`listen_addresses`), and `pg_hba.conf` (who may log in as whom, from where, with which method). A good test shows which gate decided. So 1.13 proved db's own gates, and "app connects" and "proxy is refused" moved to the tasks where those hosts are built.
+
+**What happens to the data between sessions (decision 49).** Decision 41 destroys instances after each session. For fw-ips that's free, because it holds no state. db holds data. The concept here is **compute versus state**: servers should be disposable, data should have its own lifecycle (a separate volume or backups). We chose to accept an empty database each session until T2.3 brings `pg_dump` to S3 and a tested restore. That costs nothing, proves the db build from clean every session, and in Tier 1 only test accounts exist.
+
+**Boot order (decision 50).** fw-ips forwards nothing until Ansible installs its NAT rules, which happens after the apply. A private host starting in the same apply has no network for its first minutes. So private hosts' cloud-init only writes the HTTPS mirror config, a local file, and Ansible handles the order: the `fw_ips` play runs first, each private play starts with `wait_for_connection`, and the `common` role upgrades the host. The principle: **Terraform makes resources exist, Ansible makes hosts behave**, and ordering between hosts' configuration is a configuration concern.
+
+### Part 3: Renaming a Terraform variable is free; renaming a resource is not
+
+`fw_enabled` became `hosts_enabled`, and `fw_ami_id` became `ubuntu_ami_id` (decision 51). One switch for every session host means a teardown can't remove fw-ips and forget db, which would keep billing.
+
+Why is this safe? Terraform tracks resources in state by **address**, such as `module.compute.aws_instance.fw[0]`. Variable names aren't part of any address, so renaming one changes nothing in state; the plan showed only db's resources to add. Renaming a *resource*, or adding `count` to one, does change its address. That's why last session needed `moved` blocks: without them Terraform would destroy the old address and create a new one.
+
+### Part 4: Merge first, then run
+
+After the db host code was ready, the plan was saved from the feature branch and an apply was suggested. Marko stopped this: shouldn't PRs be merged before anything runs? He was right. The rule is that AWS and the hosts only ever run code that's reviewed, passed CI and is merged. A plan from a branch could apply code that later changes or is abandoned, leaving resources nobody's code describes. From then on: merge on green CI, switch to `main`, pull, save a fresh plan, apply. Marko also gave a standing go-ahead for merging on green CI.
+
+### Part 5: Extracting a `common` role, and proving a refactor changed nothing
+
+db needed apt over HTTPS, unattended-upgrades, sshd on loopback and the SSM helper, all of which lived in `fw_ips`. Copying them (option B) leaves five copies by the time siem exists, and a fix in one but not the others is exactly the drift Phase 2 would find. So they moved into a `common` role, with `git mv` so their history followed.
+
+A refactor should change nothing on the host. The proof was `ansible-playbook --check --diff --limit fw_ips`: the only changes were the header comments edited from "fw_ips role" to "common role", plus the handlers they trigger. Then the real runs, and `changed=0` on the second.
+
+A surprise: the helper's copy task has `check_mode: false` (needed so later tasks can call it during a dry run), so even `--check` wrote it. Two dry runs swapped its header back and forth. Harmless here, but it means `--check` on this role isn't fully read-only, which is worth knowing before trusting a dry run on a production host.
+
+### Part 6: How a secret leaks, and the password helper
+
+This was the most important design discussion of the session (decision 52). A secret can leak through more paths than people expect:
+
+- **argv**: every user can see every process's command line with `ps`. So `psql -c "ALTER ROLE ... PASSWORD 'x'"` leaks.
+- **Files**: they end up in snapshots, AMIs and backups.
+- **Logs**: PostgreSQL logs a failing statement together with its error by default (`log_min_error_statement`), so a failed `ALTER ROLE` would write the password to the server log.
+- **Ansible variables**: anything Ansible holds travels back to the laptop and can be printed.
+
+Safer channels exist: **environment variables** (`/proc/<pid>/environ` is readable only by the process owner and root) and **stdin** (a pipe leaves nothing behind).
+
+`set-db-password` uses exactly those. It reads the value into a shell variable, checks it contains only letters and digits, tries a login on loopback with `PGPASSWORD`, and only if that fails pipes `ALTER ROLE` into `psql` through stdin, using `printf`, which is a shell builtin and so never appears in argv. Two `SET` lines first turn statement logging off for that session. It prints only `changed` or `unchanged`. The test login makes it idempotent without storing anything to compare against.
+
+Two details worth defending. **Validating instead of escaping**: the password generator only produces letters and digits (decision 46), so the helper refuses anything else instead of trying to escape quotes correctly. Refusing is simpler and impossible to get subtly wrong. **The role name is checked too** (`^[a-z_]+$`) when the helper was generalized to two roles, because it goes into SQL; that's SQL injection prevention in a shell script.
+
+The verification searched for the value in the `-v` run log and in PostgreSQL's logs. To avoid bringing the password to the laptop, the log was copied *to db* and searched there, then deleted. Result: 0 and 0.
+
+### Part 7: Proving a firewall, not a missing route
+
+The 1.13 check said: from the VPN admin pool, port 5432 on db must time out. The first attempt found the VPN down, but the more important point was this: the laptop has **no route** to 10.0.4.0/24. The admin pool only gets routes to the DMZ, fw-ips and mgmt. A packet to 10.0.4.10 would leave through the home Wi-Fi to the internet and time out there. That timeout would prove nothing about the firewall.
+
+The real test plays an attacker with a stolen admin certificate who adds the route by hand (`ip route add 10.0.4.0/24 dev tun0`). Then the packet does enter the tunnel, and `nc` timing out means fw-ips dropped it. The proof is on fw-ips: `FW-DROP IN=tun0 SRC=10.8.1.10 DST=10.0.4.10 DPT=5432 SYN`, three lines for the original SYN and two retries. The same test later showed port 3000 on app is dropped too. **A negative test needs evidence of *why* it failed**, not just that it failed.
+
+### Part 8: Working with a second agent, and checking its claims
+
+Mailbridge lives in its own repo, so a second Claude agent was given a self-contained prompt: the lab's fixed constraints (port 3000 behind one proxy hop, PostgreSQL as a non-superuser owner of an empty database, egress 443 only, secrets as env vars, no registry pushes), and a two-stage task: inventory and gaps first, fixes only after an OK. That structure worked: it found real problems, like `TRUST_PROXY=0` silently breaking logins behind Nginx (the app thought every request was plain HTTP, so it never set its `Secure` cookie), and an app that exited on an empty database instead of creating its schema.
+
+Three lessons from the collaboration:
+
+- **My own placeholder caused a gap.** ARCHITECTURE said the OAuth redirect was `/oauth/callback`, written before anyone looked at the app. The agent proposed adding that route. The cheaper fix was changing the lab doc to the app's real routes, because a redirect URI is just a setting in the provider console.
+- **Liveness versus readiness.** CodeQL flagged a new `/healthz` route as "missing rate limiting", because it ran a database query per request. The agent offered three options: dismiss it, add a dependency, or remove the route. The better answer was none of them. A **liveness** check ("is the process alive?") should be cheap and touch nothing. A **readiness** check ("can it serve work?") checks dependencies. Docker's `HEALTHCHECK` fires every 30 seconds and needs only liveness. Making `/healthz` liveness-only removed the alert for a real reason, not a dismissal.
+- **Verify claims about safety.** Before re-enabling GitHub Actions in the app repo, the workflows were read: the publish job requires a repo variable `PUBLISH_IMAGE=true`, which doesn't exist, and the release job needs a `v*` tag, which doesn't exist. So "publishes nothing" was true, and now we knew why.
+
+The agent's report also listed a Cyrillic search failure. A one-line query on the live db (`lower('ДОБАР ДЕН Ž')` returning lowercase, on a `C.UTF-8` database) showed it didn't apply to the lab. Checking is often faster than arguing.
+
+### Part 9: The ECR repository: tags versus digests
+
+An image has two names (decision 53). A **tag** like `mailbridge:v1.2` is a label that, by default, can be moved to a different image later. A **digest** like `mailbridge@sha256:...` is a hash of the content and can never point anywhere else. §3 already says app pulls by digest. Making tags **immutable** means a tag seen in a log also always names one image, and someone with push rights can't silently replace a release.
+
+The lifecycle policy expires untagged images after a day and keeps the last 5 tagged ones, staying under ECR's free 500 MB. That created a trap worth knowing: modern `docker build` can produce an **image index** with untagged child manifests (for multiple platforms or build attestations). An "expire untagged" rule could delete those children and break the tagged image. The build therefore used `--platform linux/amd64 --provenance=false --sbom=false`, and the check after the push confirmed the type was a single `application/vnd.oci.image.manifest.v1+json`, not an index.
+
+ECR's free scan reported 5 HIGH findings, while the app's Trivy run reported 0 fixable HIGH. Both are right: the 5 are in Debian base packages with no fix released, and ECR's basic scan doesn't show whether a fix exists. Two tools, two views of the same image.
+
+### Part 10: Two database roles: separation of duties
+
+In PostgreSQL, a table's **owner** can always alter or drop it, including its triggers. Mailbridge protects its audit log with an insert-only trigger. If the app connects as the owner, anyone with its credentials (SQL injection, a leaked environment, a shell in the container) can drop the trigger and rewrite history. So there are two identities (decision 54):
+
+- **`mailbridge`**, the owner, used only by the short migration step.
+- **`mailbridge_app`**, row access only, used by the long-running app.
+
+db's Ansible role runs as the `postgres` superuser, so it can create both roles. The grants must be applied **after** each migration, because they name tables the migration creates. So app's start does it: migrate as the owner, then `psql -f db-roles.sql` as the owner, then the app as `mailbridge_app`.
+
+The verification tested what an attacker holding the app's credentials could do: `DROP TRIGGER` → "must be owner"; `UPDATE audit_events`, `CREATE TABLE`, `TRUNCATE` and reading `pgmigrations` → "permission denied"; `ALTER TABLE` → "must be owner"; normal `SELECT` works. One test first failed for the wrong reason: `UPDATE audit_events SET event_id = event_id` gave "can only be updated to DEFAULT", because `event_id` is an identity column and PostgreSQL rejects that before it even checks privileges. **A test must fail for the reason you're testing**, so it was repeated on ordinary columns, which gave "permission denied".
+
+`pg_trgm` was the only extension the migrations needed. PostgreSQL 13 and later mark some extensions **trusted**, which a non-superuser database owner may create; `pg_trgm` is one, so the owner role didn't need superuser.
+
+### Part 11: Getting secrets into a container
+
+The app reads secrets from environment variables (decision 56). Two facts shaped the design:
+
+1. **Docker stores a container's env on disk**, in `config.v2.json` under `/var/lib/docker`, for as long as the container exists, even stopped, and `docker inspect` shows it to root. "Env var" doesn't automatically mean "memory only".
+2. **Root on app can read SSM anyway**, by asking the instance role. Hiding values from root gains nothing. What matters is keeping them out of argv, logs, Ansible output and anything that outlives the service.
+
+So each step of `mailbridge.service` is a small root-only script that pulls its own values from SSM into its environment and runs `docker run --rm -e NAME`. `-e NAME` without `=value` makes Docker copy the value from the environment, so it never appears in argv. `--rm` deletes the container, and Docker's stored copy of its env, as soon as it stops, and systemd's `Restart=on-failure` replaces Docker's `--restart`. The verification after `systemctl stop`: 0 containers left.
+
+The image reference contains the account ID, which the public repo leaves out. So Ansible holds only the digest, and the start script builds the registry name on the host with `aws sts get-caller-identity`, a call that needs no permission. Docker pulls from ECR with the **credential helper**, which asks the instance role for a short-lived token on each pull, with caching turned off: no registry password is ever stored on app. Compare that to the laptop push, where `docker login` warned "credentials stored unencrypted", which is why the push ended with `docker logout`.
+
+**The IMDS hop limit proved itself.** The instance has `http_put_response_hop_limit = 1`. A container sits one network hop further from the metadata service than the host, so the token request from inside the container timed out. A compromised app can't steal the instance role's credentials, even though the host can use them.
+
+### Part 12: systemd and Docker, and a one-character bug
+
+`mailbridge.service` chains `ExecStartPre` steps (pull, migrate, grants) before `ExecStart` (the app). Systemd runs them in order, and if any fails the app doesn't start. The app runs in the **foreground** (`Type=exec`, no `docker run -d`), so systemd sees it exit and can restart it.
+
+The first run's journal showed `No such container: mailbridge` and the unit marked failed. The cause: when the app container exits, `--rm` deletes it immediately. Systemd then still runs `ExecStop=docker stop mailbridge`, which finds nothing and exits 1, and systemd counts that as a failure. The fix is one character: `ExecStop=-/usr/bin/docker stop ...`. The `-` prefix tells systemd that this command's failure doesn't matter. Verified: stop gives `Result=success`, start gives `/healthz` 200 (PR 46).
+
+### Mistakes and what they taught
+
+- **Planning from a branch.** Caught by Marko. Merge first, then plan from `main`; it's now a standing rule.
+- **An AWS session expired mid-plan**, leaving a stale S3 state lock (`use_lockfile`). The fix is `terraform force-unlock`, but only after confirming three things from the lock info: the operation was a *plan* (not a half-finished apply), it came from this machine, and its timestamp matched the failed run. And no Terraform process was running. Never force-unlock blindly.
+- **zsh's `:r` modifier.** `$ACC:role` became the account ID followed by `ole`, because `:r` strips a "file extension". Always write `${ACC}` when a colon follows.
+- **Jinja ate a Docker format string.** `docker ps --format '{{.Names}}'` inside an Ansible ad-hoc command is parsed as a template. Use Docker's table output, or escape the braces.
+- **`tail -1` cut an error message**, and a `grep` filter hid the column name that was being looked up. Debug output should be filtered less, not more.
+- **The `--check` dry run wrote a file** because of `check_mode: false`. Know which tasks ignore check mode before trusting a dry run.
+- **ansible-lint in CI doesn't install collections.** The new `community.postgresql` modules failed CI's syntax check until CI installed the pinned collections from `ansible/requirements.yml`. Reproducing CI locally in a clean venv with an empty collection path caught it before pushing.
+
+### Decisions from this session
+
+| # | Topic | Choice | Why |
+|---|---|---|---|
+| 47 | db's password | db's own role reads one ARN, sets it on the host | Value never on the laptop or in Ansible output |
+| 48 | db verification | db's own gates now; app and proxy checks in their tasks | Each host tested against its real dependency |
+| 49 | Data between sessions | Empty database each session until T2.3 backups | Free, proves the build from clean |
+| 50 | Boot order | One apply; Ansible orders plays, `wait_for_connection` | fw-ips forwards only after its role runs |
+| 51 | Session switch | `hosts_enabled` for every host; `ubuntu_ami_id` | A teardown can't forget a host; renames are state-neutral |
+| 52 | Setting the password | Helper: test login, `ALTER ROLE` through stdin, logging off | No argv, file, log or Ansible variable |
+| 53 | ECR | Immutable tags, scan on push, AWS-managed KMS, lifecycle | Tags always name one image; free |
+| 54 | DB roles | Owner for migrations, `mailbridge_app` for the app | App credentials can't touch the audit log or schema |
+| 55 | App secrets | Generated in `persistent`; OAuth secrets in 1.19 | Decision 46 pattern; OAuth is optional for 1.14 |
+| 56 | Secrets into containers | Start scripts, `docker run --rm -e NAME`, systemd restarts | Out of argv and files; Docker's copy gone on stop |
+| 57 | Build and push | By hand from the laptop now; CI with OIDC in T2.2 | No new credential; single-platform image |
+
+### Interview questions to practise
+
+1. Name four ways a secret can leak from a Linux host, and a safer channel for each.
+2. Why does `PGPASSWORD=x psql ...` leak less than `psql -c "... PASSWORD 'x'"`? Who can still see it?
+3. Why validate a password's characters instead of escaping it before putting it in SQL?
+4. What are PostgreSQL's three gates for a network login? Which one gives "no pg_hba.conf entry"?
+5. What's the difference between `peer` and `scram-sha-256` authentication?
+6. Why can't you prove a firewall drops traffic just because `nc` times out? What evidence do you collect instead?
+7. Why does renaming a Terraform variable not touch state, while renaming a resource does?
+8. When is `terraform force-unlock` safe, and what do you check first?
+9. What's the difference between a liveness and a readiness check? Which should a Docker `HEALTHCHECK` use?
+10. Tag versus digest: which do you deploy by, and why make tags immutable as well?
+11. Why can an "expire untagged images" lifecycle rule break a tagged image?
+12. Why should an app not connect to its database as the table owner? How did you prove the runtime role is limited?
+13. What does it mean that `pg_trgm` is a "trusted" extension?
+14. Docker stores container env on disk. Where, and how did you limit how long secrets stay there?
+15. How does the IMDS hop limit protect an instance role from a compromised container?
+16. Why let systemd restart the container instead of Docker's `--restart`?
+17. What does the `-` prefix on a systemd `ExecStop=` line do, and why did you need it?
+18. Why must PRs be merged before their code is applied to infrastructure?
+19. How do you verify a claim like "this CI workflow publishes nothing"?
+20. Private hosts have no network at first boot. How does the lab still configure them in one apply?
+
+### What comes next
+
+Task 1.15, proxy: Nginx with TLS from Let's Encrypt staging (DNS-01 through Route 53 with the proxy's instance role), ModSecurity v3 with the OWASP CRS, and rate limits. The app's requirements are written down in its `docs/deployment.md` §3: `X-Forwarded-Proto`, `X-Forwarded-For` and `Host`, request bodies of at least 800 KB, proxy timeouts of at least 60 s, and the CRS JSON body processor. 1.15 also closes the last check left from decision 48: proxy can reach app on 3000.
+
+The next session starts with the routine. Expect a 6-resource apply (fw-ips's 4, db, app). db comes up empty (decision 49), and app's start re-creates the schema and grants, so the routine itself proves both hosts rebuild from clean.
