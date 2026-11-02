@@ -579,3 +579,194 @@ Full reasoning is in `rationale.md`, entries 36 to 41.
 ### What comes next
 
 Next session starts with the routine in TASKS: `terraform apply`, put the new instance ID in the inventory, wait for cloud-init, run the role, connect the VPN. That is the second build from code. If every check passes, delete the fallback AMI and its snapshot. Then task 1.13: the `db` host and its role, the first private host behind fw-ips.
+
+### Afternoon session: closing "Before db"
+
+The morning turned fw-ips into code. The afternoon worked through the four items agreed before `db`: a second rebuild from code, a set of small fixes, a way for Ansible to find hosts without hand-edited IDs, and a decision on where the database password lives. All four are done, through PRs 26 to 32 and decisions 42 to 46.
+
+There's a common thread. Almost every fix made something **authoritative**: one place in code that states the whole truth, instead of a piece that adds to a truth held somewhere else. The ENI's security groups, the inventory and the password all moved that way.
+
+### Part 10: The second build finds what the first one couldn't
+
+The session routine (decision 41) creates four resources: the instance, an Elastic IP, the association between them, and the `vpn` record. The first apply failed on the association with `IncorrectInstanceState`: AWS won't attach an address to an ENI whose instance is still starting.
+
+The cause is how Terraform orders work. It builds a **dependency graph** from references: if resource B mentions `A.id`, B waits for A. Everything else runs in parallel. The association referenced the Elastic IP (`aws_eip.fw[0].id`) and the ENI (`var.fw_eni_id`, a plain string passed in from the network module). It never mentioned the instance, so Terraform assumed they were independent and started both at once.
+
+The fix is `depends_on = [aws_instance.fw]`. It's meant for exactly this case, where an ordering need is real but invisible in the references. Use it sparingly: every `depends_on` is a dependency Terraform can't infer, so it needs a comment saying why.
+
+Why didn't the morning's rebuild hit this? Then the Elastic IP was imported and already associated. Only today were all four resources created from nothing at the same moment. That's why a second build matters: each build exercises a slightly different path through the code. The evidence for the fix comes at the next session start: one apply, `4 added`, no error.
+
+The rest of the routine passed: cloud-init `done`, a first Ansible run with `failed=0`, a second with `changed=0`, VPN and private DNS working, and a plan with no changes. With two clean rebuilds behind it, the fallback AMI and its snapshot were deleted. We checked first that the running instance came from the stock Ubuntu image, not from the fallback.
+
+A small detail from the idempotency check: the second Ansible run reported `ok=32` where the first reported `ok=42`. The ten missing are **handlers**. A handler runs only when a task that notifies it reports a change, so on a run where nothing changes, no handler runs.
+
+### Part 11: Additive versus authoritative resources
+
+The fw-ips ENI carried two security groups: `mailbridge-lab-fw` and the VPC `default`. §4 says sg-fw only. How did `default` get there?
+
+Every ENI must have at least one security group. Ours was created in the network module without any, so AWS gave it `default`. The security module then used `aws_network_interface_sg_attachment`, which **adds one membership**. It manages "sg-fw is attached to this ENI", not "this ENI's groups are exactly X". Nothing in code ever said `default` shouldn't be there, so nothing removed it.
+
+This pattern is everywhere in Terraform's AWS provider, and it's worth recognising:
+
+| Additive (manages one piece) | Authoritative (manages the whole set) |
+|---|---|
+| `aws_network_interface_sg_attachment` | `security_groups` on `aws_network_interface` |
+| `aws_iam_role_policy_attachment` | `aws_iam_role_policy_attachments_exclusive` |
+| `aws_security_group_rule` | inline `ingress`/`egress` blocks |
+
+Additive resources are flexible: several modules can each add their piece. But anything added outside code, by AWS or by hand, survives silently. Authoritative resources remove whatever code doesn't list, so drift becomes visible in the next plan.
+
+We chose to make the ENI declare its full list (decision 42). Two details made that safe:
+
+- **The `removed` block.** Simply deleting the attachment from code would make Terraform *destroy* it, which detaches sg-fw. Depending on the order of operations, the ENI could briefly be left with no group from §4. A `removed { lifecycle { destroy = false } }` block tells Terraform to forget the resource without touching it. The plan showed exactly that: the ENI changed in place, removing one group (looked up first: `default`), the attachment "no longer managed", and `0 to destroy`.
+- **Modules that reference each other.** Now network takes sg-fw's ID from security, while security takes `vpc_id` from network. That sounds circular, but Terraform orders individual resources, not modules: VPC, then sg-fw, then ENI. There's no loop, so it's fine.
+
+Verified: the ENI lists only `mailbridge-lab-fw`, the next plan shows no changes, and the VPN ping kept working throughout.
+
+### Part 12: Least privilege, precisely
+
+The fw-ips parameter grant read `arn:aws:ssm:eu-central-1:*:parameter/vpn/fw-ips/*`. The `*` sits in the account field. Was that a hole?
+
+Not really. IAM never lets one account read another account's resources on its own policy alone: the resource's account has to grant access too. But least privilege means a policy should say exactly what it means, and this one said "any account". We replaced the `*` with values looked up from the `aws_caller_identity` and `aws_region` data sources (decision 43). Writing the account ID into the code was ruled out, because the repo is public.
+
+The verification used the **IAM policy simulator**. For `ssm:GetParameter` it answered `allowed` on `/vpn/fw-ips/server.key`, and `implicitDeny` on `/vpn/ca/key` and `/mailbridge/db-password`. `implicitDeny` means no statement allows the call, which is IAM's default answer. Then a real Ansible run (`changed=0`) proved fw-ips could still pull its files under the narrower ARN.
+
+The role's description also said "SSM access only", left over from before decision 39 added the parameter grant. Descriptions are documentation an auditor reads in the console, so they should be accurate too.
+
+### Part 13: Telling Suricata which way a rule looks
+
+Rule 1000004 drops a client that opens more than 60 connections to the proxy in 10 seconds. It matched `flags:S` with no `flow:` keyword.
+
+Suricata tracks each TCP connection as a **flow** with two sides. `flow:to_server` matches packets from the side that opened the connection, and `flow:established` matches only after the three-way handshake has completed. The trap is combining them here. When a SYN arrives, the handshake hasn't happened yet, so `flow:established,to_server` would never match a SYN, and the flood rule would silently stop working. The right form is `flow:to_server` alone. `rev` goes from 1 to 2 because the logic changed, which lets alerts in a SIEM say which version fired.
+
+Running the old and new files side by side on fw-ips showed this wasn't just style. The old rule logged a warning on every load: `SYN-only to port(s) 443:443 w/o direction specified, disabling for toclient direction`. Suricata had been guessing the direction since task 1.12, and nobody had read `suricata.log` closely enough to see it. The new rule fires on the flood capture exactly as before (10 hits), stays silent on clean TLS, and loads with no warnings.
+
+### Part 14: Deploying a rule change safely
+
+Looking at how the rule would be deployed turned up two weaknesses in the role:
+
+1. **A rule change notified `Restart Suricata`.** Suricata fails closed, so while it restarts, all forwarded traffic stops. Decision 38 already used `reload-rules` for ET Open updates, but custom rules still restarted.
+2. **Nothing checked `local.rules` before installing it.**
+
+I first claimed that a broken rule would make Suricata fail to start. That was wrong. Our `suricata.yaml` doesn't set `init-failure-fatal`, so Suricata **skips** a rule it can't parse and starts anyway. The real risk is quieter and worse: the rule you think protects the proxy simply doesn't exist, and only a log line says so.
+
+The fix (decision 44) has two parts:
+
+- **Validate before install.** Ansible's `copy` module has a `validate` option: it writes the new file to a temporary path, runs a command on it, and replaces the live file only if the command exits 0. The command is `suricata -T -c /etc/suricata/suricata.yaml -S %s --set unix-command.enabled=no`. `-T` means test and exit. `-S` loads only this rule file. The socket flag keeps the test from replacing the running daemon's command socket, which was the cause of the morning's mystery. Before relying on it, we tested that `-T` really exits 1 on a broken rule and 0 on the current file. It does.
+- **Reload instead of restart.** A new handler runs `suricatasc -c reload-rules`. One subtlety: `suricatasc` exits 0 even when the engine refuses. So the handler checks the *reply* for `"return": "OK"`, and retries for up to two minutes in case a restart ran just before it, as on a fresh host where both handlers fire.
+
+The proof was Suricata's own uptime counter. It read 2007 seconds before the deploy and 2258 after. A restart would have reset it. `ruleset-stats` showed 53,265 rules loaded and 0 failed.
+
+CI also caught something my laptop couldn't, because ansible-lint isn't installed there: a role's variables must start with the role name (`fw_ips_suricata_reload`). Linters like this keep variables from different roles from colliding.
+
+### Part 15: Static versus dynamic inventory
+
+Ansible reaches hosts through SSM, which addresses them by instance ID, and fw-ips gets a new ID every session. Until today a `sed` command copied that ID into an untracked `hosts.yml`. That's fine for one host. With five hosts, a stale or swapped ID either fails to connect or applies the `db` role to the wrong machine.
+
+An inventory can be **static**, a file listing hosts, or **dynamic**, a plugin that asks a source of truth at run time. The options were B, Terraform writes the file, or C, a script turns `terraform output` into the file. Both keep a *copy* of the IDs and refresh it at certain moments. The `amazon.aws.aws_ec2` plugin (decision 45) keeps no copy. Each run, it asks EC2 for running instances tagged `Project=mailbridge-lab`, makes the `Role` tag the group, and uses the instance ID as `ansible_host`.
+
+Points to be able to defend:
+
+- **It adds no new access.** Ansible already needs your AWS credentials, because the SSM `ProxyCommand` calls `aws ssm start-session`.
+- **Tags become part of security.** Whatever carries `Role=db` gets the `db` role. So only Terraform sets these tags, and only the admin user can change them.
+- **Getting it working taught a dependency lesson.** The plugin needs `boto3` inside Ansible's own pipx venv. Then it failed again, because `aws login` credentials need botocore's optional **CRT** part (AWS's Common Runtime). The AWS CLI bundles it, which is why the CLI worked while Ansible didn't. `pipx inject ansible boto3` alone wasn't enough; we also needed `pipx inject --force ansible "botocore[crt]"`. The quotes stop zsh from treating `[crt]` as a filename pattern.
+- **Some warnings aren't ours.** amazon.aws 11.4.0 prints a deprecation warning about the `tags` host variable on every run. Reading the plugin's source showed that its `parse()` method prints it unconditionally. Our file uses the new `ec2_tags`. We left the warning visible, because the only switch hides *all* deprecation warnings, including future ones that would concern our own code.
+
+Verified: `ansible-inventory --graph` shows `fw_ips` → `mailbridge-lab-fw-ips`, ping returns `pong`, and `site.yml` reports `changed=0`. The real test is the next session: a brand-new instance should appear with no edit at all.
+
+### Part 16: Secrets and Terraform state, in depth: sensitive, ephemeral, write-only
+
+This part is the one to know cold. Write-only attributes and ephemeral resources are new (Terraform 1.10 and 1.11), many engineers haven't met them yet, and the reasoning behind them is a good test of whether you understand what Terraform actually does.
+
+**What state is for.** Terraform is declarative: you describe the end result, and it works out the steps. To do that it must know three things: what the code says, what exists in AWS, and *which real object each resource in the code corresponds to*. The third lives in the **state file**. On each plan, Terraform refreshes state from AWS, compares it with the code, and proposes the difference. To compare, it stores every attribute of every managed resource. Every attribute: passwords included.
+
+So the classic pattern, a `random_password` resource feeding `aws_ssm_parameter.value`, leaves the password in plain text in the state file. That file sits in our S3 bucket, encrypted and private, but it's still a second copy of the secret, readable by anyone who can read the bucket, and it's in every saved plan file too. Older tutorials accept this as the cost of doing it in code.
+
+**Three different protections, often confused:**
+
+| Kind | Shown in terminal? | Stored in plan file? | Stored in state? | Since |
+|---|---|---|---|---|
+| Normal attribute | yes | yes | yes | always |
+| `sensitive` | no, `(sensitive value)` | yes | yes | 0.14/0.15 |
+| Ephemeral resource or value | no | no | no | 1.10 |
+| Write-only attribute | no, `(write-only attribute)` | no | no (null) | 1.11 |
+
+- **`sensitive` is only about display.** It stops a value from being printed, and that's all. A common interview trap is "We mark it sensitive, so it's safe." It isn't; it's still in state.
+- **An ephemeral resource** exists only while Terraform runs. Our `ephemeral "random_password" "db"` is generated in memory, used, and thrown away. You saw it in the apply output: `Opening...`, then `Closing...`. Because it's never stored, Terraform enforces where it can be used. An ephemeral value may flow only into places that also aren't stored: other ephemeral resources, provider configuration, ephemeral variables and outputs, and write-only attributes. Put it into a normal attribute and `terraform validate` refuses.
+- **A write-only attribute** is the bridge to real infrastructure. The provider receives the value during apply and sends it to AWS, and Terraform records `null`. Our AWS provider (6.71.0) offers `value_wo` on `aws_ssm_parameter`.
+
+**Why `value_wo_version` exists.** Normally Terraform decides whether to update something by comparing the code's value with the stored one. With a write-only value there's nothing stored to compare. Worse, our ephemeral password generates a *new* random value on every run. If Terraform sent the value whenever it differed, it would rotate the password on every apply. So the provider pairs the write-only attribute with an ordinary number, `value_wo_version`. The value is sent on create, and afterwards only when the version changes. That's why the second plan said `No changes`, even though it had generated a brand-new password in memory and discarded it.
+
+**Rotation, step by step:**
+1. Bump `value_wo_version` from 1 to 2 and apply: SSM gets a new value.
+2. Re-run the `db` role, which sets PostgreSQL's password from SSM.
+3. Re-run the `app` role, which picks it up.
+
+Between steps 1 and 3 the app holds the old password, so rotation is a short, planned maintenance step. Proper zero-downtime rotation needs two valid credentials at once, which is what Vault-style dynamic credentials or Secrets Manager rotation provide.
+
+**The evidence, not just the theory:**
+- The saved plan, read as JSON with `terraform show -json`, had no `value` and no `value_wo`, and not one 40-character alphanumeric string anywhere.
+- After apply, the state had `value_wo: null`, `value: ""` and `value_wo_version: 1`.
+- The real value, read from SSM into a shell variable that was never printed, appeared in the state **0 times**.
+- The plan *displayed* `value = (sensitive value)` before apply. That's the provider's computed attribute, and it ended up empty. Reading the plan's labels is a skill in itself: "sensitive" means stored but hidden, "write-only" means never stored.
+
+**What this doesn't solve.** The password is now protected by IAM instead of by state hygiene. Anyone with `ssm:GetParameter` on that name, plus decrypt rights on the `aws/ssm` key, can read it: today that's only the admin, and later the `db` and `app` instance roles, each granted that one ARN. Terraform also can't detect drift in the value, because it never knows it. If someone changes the parameter by hand, no plan will notice.
+
+**The alternatives, for comparison:**
+- **B, by hand with `aws ssm put-parameter`:** also keeps the value out of state, but it's outside code, and the value passes through a terminal. The VPN CA key *must* be made this way, because the CA is offline on the laptop. A random password has no such reason.
+- **C, the classic `value`:** the password ends up in state and plan files.
+
+**The new stack.** This also started `terraform/persistent`, the stack for things that outlive the lab. It uses the same state bucket under its own key, `persistent/terraform.tfstate`, so a lab teardown can never reach it. It holds only the password for now. Task 1.2 imports the hand-built buckets, zone and Budget into it, one at a time.
+
+### Mistakes from this afternoon and what they taught
+
+- **The association race.** I assumed references captured every ordering need. Implicit dependencies come only from references. When an order matters and nothing in the code mentions it, say so with `depends_on`.
+- **"A broken rule stops Suricata."** I said it before checking the config. Suricata skips the rule instead, which is quieter and worse. The fix was right, but the reason I gave was wrong. Check the failure mode before describing it.
+- **A PR body said "reload" when the role restarted.** I read the handler afterwards and corrected the PR. Describe what the code does after reading it, not what you expect it to do.
+- **A zsh trap printed the account ID.** In `"...::$A:role/..."`, zsh read `$A:r` as a modifier ("remove extension") and mangled the ARN. The error message echoed the account ID into the session output. Nothing reached the repo. In zsh, always write `${A}` when a colon follows a variable.
+- **A merge attempt before CI registered.** `gh pr checks --watch` returned "no checks" for a fresh push, and branch protection correctly refused the merge. Wait for checks to appear before watching them.
+- **The deprecation warning.** I first assumed our file triggered it and changed `tags` to `ec2_tags`. That was right to do, but it didn't stop the warning. Reading the plugin source showed the real cause. When a warning persists after a fix, go to the source rather than guessing again.
+
+### Decisions from this afternoon
+
+Full reasoning is in `rationale.md`, entries 42 to 46.
+
+| # | Topic | Choice | Why |
+|---|---|---|---|
+| 42 | ENI security groups | ENI declares its full list; attachment forgotten with `removed` | Additive attachment left `default` on; forgetting never detaches sg-fw |
+| 43 | fw-ips grant | Account and region from data sources | No `*` account, no ID in a public repo |
+| 44 | Custom rule deploys | `-T -S` validation, then `reload-rules` | Broken rules fail the task; no fail-closed pause |
+| 45 | Inventory | `aws_ec2` plugin by `Project` and `Role` tags | No copy of IDs to go stale; same credentials as SSM |
+| 46 | DB password | Ephemeral password into write-only `value_wo` | In code, yet in no state, plan, repo or terminal |
+
+### Interview questions to practise
+
+1. How does Terraform decide the order in which to create resources? When do you need `depends_on`, and why use it sparingly?
+2. Why can a second rebuild from code find a bug the first didn't?
+3. What's the difference between `aws_network_interface_sg_attachment` and `security_groups` on the ENI? Name another additive/authoritative pair.
+4. How do you stop Terraform from managing a resource without destroying it?
+5. Two modules reference each other. Why isn't that a dependency cycle?
+6. Is `*` in the account field of an IAM resource ARN a cross-account hole? Why or why not?
+7. What does `implicitDeny` mean in the IAM policy simulator?
+8. Why does a SYN-flood rule need `flow:to_server`, and why would `flow:established,to_server` break it?
+9. What does Suricata do with a rule it can't parse, and why is that dangerous?
+10. How does Ansible's `validate` option protect a live config file?
+11. Why reload rules rather than restart an inline IPS, and how did you prove there was no restart?
+12. `suricatasc` exits 0 even on failure. How do you handle a tool like that in automation?
+13. Static versus dynamic inventory: what's the trade-off, and what new risk do tags introduce?
+14. What is Terraform state for, and why does it end up containing secrets?
+15. What does `sensitive` protect against, and what doesn't it protect against?
+16. Explain ephemeral resources and write-only attributes. Where may an ephemeral value be used?
+17. Why does a write-only attribute need a separate version attribute? How do you rotate the password?
+18. How did you *prove* the password isn't in state, without printing it?
+19. After this change, what still protects the password, and who can read it?
+20. Why is the CA key created by hand while the DB password is created by Terraform?
+
+### What comes next
+
+The next session starts with the routine in TASKS, which no longer has an inventory step: `terraform apply` (expect `4 added` in one go, proving `depends_on`), `ansible-inventory --graph` (expect the new instance under `fw_ips` with no edit), cloud-init, `site.yml` twice, then the VPN checks.
+
+Then task 1.13, `db`, the first private host. It needs:
+- a Terraform instance with `Role=db`
+- an instance role that may read only `/mailbridge/db-password`
+- the `db` role: PostgreSQL, the app user with the password pulled on the host, and access from `app` only
