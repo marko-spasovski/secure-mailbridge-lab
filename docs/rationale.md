@@ -533,3 +533,15 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** A shell helper instead of a pure Ansible module, and a dependency on the `aws` CLI snap shipped with the Ubuntu AMI. A failed `aws` call is caught by an empty-file check, since `sh` has no `pipefail`. Rotating a key means updating SSM and rerunning the role, which restarts OpenVPN and drops VPN clients for a few seconds; a CRL update needs no restart.
 
 **Verify once built.** A dry run on the hand-built host reports all five files unchanged; output shows only `censored due to no_log`; a second run reports `changed=0`; keys are 0600 root; a VPN client reconnects after the role restarts OpenVPN.
+
+## 40. Rebuild fw-ips from code (2026-11-02)
+
+**Problem.** fw-ips was built by hand without a key pair. Task 1.6 puts it in Terraform, and the `fw_ips` role now covers its configuration. The question was whether to adopt the running instance or replace it.
+
+**Options.** A: import IAM and the Elastic IP, and build a new instance from code. B: import everything, including the instance. C: import the instance now and rebuild in 1.20.
+
+**Chosen: A.** Adding `key_name` replaces an instance anyway, so B could only work by leaving the key out of the code, and then the code wouldn't describe how a fresh host gets its key. A tests today's role on a clean host now rather than in 1.20. IAM is imported, because a role can't be recreated under the same name without deleting it first. The Elastic IP is imported so the `vpn` address doesn't change. An audit of the old host before the rebuild found one gap the role didn't cover, the HTTPS apt sources, which was fixed first.
+
+**Trade-off accepted.** The ENI is the old instance's primary interface, and AWS never detaches a primary interface, so the old instance must be terminated, not stopped, before the new one launches. Its AMI is the fallback, at about a dollar a month until it's deleted. Its attachment has `DeleteOnTermination` off, so the ENI and its routes survive. The VPN is down between the termination and the new host's Ansible run.
+
+**Verify once built.** The plan shows 7 imports, 3 additions and nothing changed; a second plan after apply shows no changes; the ENI's source/dest check stays off; `ansible-playbook site.yml` then reports `changed=0` on its second run; the VPN, DNS, Suricata and nftables checks from 2026-11-02 pass again.
