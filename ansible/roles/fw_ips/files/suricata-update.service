@@ -1,0 +1,11 @@
+# Managed by Ansible (fw_ips role). Decision 38.
+# suricata-update tests the new ruleset with suricata -T before installing it,
+# then reload-rules swaps it into the running engine without stopping traffic.
+[Unit]
+Description=Update Suricata rules (ET Open) and reload them
+Wants=network-online.target
+After=network-online.target suricata.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/suricata-update --reload-command "/usr/bin/suricatasc -c reload-rules"

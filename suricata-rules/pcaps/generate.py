@@ -4,6 +4,9 @@
 Uses only the standard library, so anyone can repeat it. Run from this
 directory. Checksums are left at zero, so test with: suricata -k none
 
+On fw-ips, also pass --set unix-command.enabled=no. Otherwise the test run
+replaces the daemon's command socket, and reload-rules then fails (decision 38).
+
 The traffic is fake and uses example.test, never the real domain.
 """
 import struct

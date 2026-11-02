@@ -20,7 +20,7 @@ it is verified, and the relevant doc section is updated.
 - [~] **Delegate the subdomain:** zone and NS records built by hand and verified with `dig`, parent MX unchanged. Import the zone in 1.2.
 - [ ] **Each session during the fw-ips hand build:** start by allocating an Elastic IP, associating it with the ENI, starting fw-ips and updating the `vpn` record; end by stopping fw-ips and releasing the Elastic IP (decision 24).
 - [x] **Ansible over SSM:** decided: SSH tunnelled through SSM with a laptop-only key (decision 36). fw-ips gets the public key once through SSM, because it was launched without a key pair.
-- [ ] **Suricata upkeep:** schedule `suricata-update`, and find out why `reload-rules` was refused once. Do both in the `fw_ips` role.
+- [x] **Suricata upkeep:** daily `suricata-update.timer` with `reload-rules`; the refusal was a test run replacing the command socket (decision 38).
 - [ ] **Own package mirror or proxy:** Marko wants to discuss this later. Parked until Tier 1 is finished; no design change yet.
 - [ ] **SSH over the VPN:** proposed as a daily-use path from the admin pool, with SSM kept for emergencies. Discuss after 1.9b; no design change yet.
 - [ ] **Mailbridge repo location:** where the source lives, so the image can be built and pushed to ECR. Needed for 1.14.
@@ -96,8 +96,8 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Note: the role owns the whole `suricata.yaml`, installed with `copy` (decision 37)
   - Verify: `suricata -T` passes; `sudo tail -f eve.json` shows flows while using the VPN
 - [x] **1.12** Custom Suricata rules and test pcaps · **C** (Marko explicitly asked Claude to write these)
-  - Note: captures are synthetic, so re-test rules against real TLS in 1.15, then consider promoting them to `drop`. `suricatasc reload-rules` was refused once, cause unknown, so a restart loaded them.
-  - Verify: `suricata -r <pcap> -S <rules>` raises the expected alert; live traffic is dropped inline
+  - Note: captures are synthetic, so re-test rules against real TLS in 1.15, then consider promoting them to `drop`. `reload-rules` was refused because a `suricata -r` test run replaced the daemon's command socket; tests on fw-ips use `--set unix-command.enabled=no` (decision 38).
+  - Verify: `suricata -k none -r <pcap> -S <rules> --set unix-command.enabled=no` raises the expected alert; live traffic is dropped inline
 
 **db, app, proxy**
 - [ ] **1.13** `db` role: PostgreSQL, app user, access from the app host only · C
