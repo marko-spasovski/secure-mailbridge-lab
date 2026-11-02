@@ -76,7 +76,7 @@ Deploy: Terraform (infra) + Ansible (config) · Teardown: `terraform destroy` wh
 | siem | t3.medium (t3.large if the indexer struggles) | 50 GB | Wazuh | 1 |
 | mon | t3.small | 20 GB | Prometheus, Grafana, Alertmanager | 2 |
 
-All instances: IMDSv2 required · SSM agent (admin access, no SSH from internet) · unattended security updates · apt over HTTPS (regional Ubuntu mirror, port 80 stays closed) · Wazuh agent · node_exporter.
+All instances: IMDSv2 required · SSM agent (admin access; Ansible uses SSH tunnelled through SSM to sshd on loopback, so port 22 is never open to any network) · unattended security updates · apt over HTTPS (regional Ubuntu mirror, port 80 stays closed) · Wazuh agent · node_exporter.
 
 - fw-ips: runs Ubuntu 24.04 LTS (official Canonical AMI, x86_64).
 - fw-ips: its Elastic IP belongs to the `lab` stack and exists only during a session. Clients connect to `vpn.<domain>` (TTL 60), which `lab` updates on each apply.

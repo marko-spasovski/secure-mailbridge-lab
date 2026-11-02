@@ -483,3 +483,15 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** Synthetic captures can't prove behaviour against real TLS, so 1.15 re-tests them. A rule on the server name doesn't fire when a client sends no name. The threshold is a first guess, to tune in 2.2.
 
 **Verify once built.** Each capture raises only its intended rule, `clean-tls.pcap` raises nothing, and a live flood raises `ips.blocked` in `stats.log`.
+
+## 36. How Ansible reaches the hosts (2026-11-02)
+
+**Problem.** Ansible is agentless: for each task it connects, copies a Python module, runs it and reads the JSON result. Its default transport is SSH, but no security group, NACL or nftables rule allows port 22, and none should. Every host already runs the SSM agent, which holds an outbound 443 connection to AWS that `aws ssm start-session` can ride back in on.
+
+**Options.** A: normal SSH carried inside an SSM session (`ProxyCommand` with the `AWS-StartSSHSession` document), with a laptop-only key. B: the `community.aws.aws_ssm` connection plugin, which needs no SSH but moves files through an S3 bucket. C: SSH over the VPN from the admin pool.
+
+**Chosen: A.** The SSH traffic reaches sshd on the host's loopback, which nftables already accepts, so no network path to port 22 is opened. sshd is set to listen on loopback only, so a later firewall mistake still finds nothing listening. The instance role needs nothing new. B would add a bucket and S3 read and write to `mailbridge-lab-ssm-min`, undoing part of decision 22, and the plugin is slower and less reliable. C needs port 22 opened in three places, and on fw-ips Ansible would be managing OpenVPN over OpenVPN, so one bad push could cut the connection it runs on.
+
+**Trade-off accepted.** There is a key to manage. A stolen key alone reaches nothing, because SSM also needs a valid AWS session, but a lost key means installing a new one through SSM. fw-ips was launched without a key pair, so its key is added once by hand through SSM. Later instances get it from Terraform's `aws_key_pair`, where changing the key replaces the instance.
+
+**Verify once built.** `ansible fw_ips -m ping` returns `pong`; `ss -tlnp` on the host shows sshd on `127.0.0.1:22` only; `nc -zv` to the host's port 22 from the admin pool fails; the instance role's policies are unchanged.

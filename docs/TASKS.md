@@ -19,7 +19,7 @@ it is verified, and the relevant doc section is updated.
 
 - [~] **Delegate the subdomain:** zone and NS records built by hand and verified with `dig`, parent MX unchanged. Import the zone in 1.2.
 - [ ] **Each session during the fw-ips hand build:** start by allocating an Elastic IP, associating it with the ENI, starting fw-ips and updating the `vpn` record; end by stopping fw-ips and releasing the Elastic IP (decision 24).
-- [ ] **Ansible over SSM:** decide how Ansible connects to hosts with no SSH. Needed before the `fw_ips` role.
+- [x] **Ansible over SSM:** decided: SSH tunnelled through SSM with a laptop-only key (decision 36). fw-ips gets the public key once through SSM, because it was launched without a key pair.
 - [ ] **Suricata upkeep:** schedule `suricata-update`, and find out why `reload-rules` was refused once. Do both in the `fw_ips` role.
 - [ ] **Own package mirror or proxy:** Marko wants to discuss this later. Parked until Tier 1 is finished; no design change yet.
 - [ ] **SSH over the VPN:** proposed as a daily-use path from the admin pool, with SSM kept for emergencies. Discuss after 1.9b; no design change yet.
@@ -75,6 +75,7 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
 **fw-ips**
 - [ ] **1.6** Remove the `CKV2_AWS_5` skips as groups get attached. `modules/compute` and IAM: fw-ips instance, IMDSv2, encrypted gp3, `credit_specification = "standard"`, source/dest check off, Elastic IP and `vpn.<domain>` record · C
   - Note: roles use `mailbridge-lab-ssm-min`, never `AmazonSSMManagedInstanceCore` (decision 22)
+  - Note: instances get the Ansible public key through `aws_key_pair`; the private key stays on the laptop (decision 36)
   - Verify: `tflint` and `checkov` pass; plan shows `http_tokens = "required"`; the IAM simulator denies the fw-ips role `ssm:GetParameter` on `/vpn/ca/*` and `/mailbridge/*`; `aws ssm start-session` connects; `dig vpn.<domain> +short` matches the Elastic IP
 - [x] **1.7a** Offline CA on the laptop with easy-rsa, outside the repo: CA, CRL, encrypted key backed up to SSM under `/vpn/` · M+C
   - Verify: `pki/private/ca.key` starts with `ENCRYPTED PRIVATE KEY`; `openssl crl -in pki/crl.pem -noout -nextupdate` shows a future date; the SSM parameter exists as `SecureString`
