@@ -13,7 +13,7 @@ it is verified, and the relevant doc section is updated.
 ## Current position
 
 - **Phase:** 1, Tier 1 on AWS (0.6 and 0.7 still open)
-- **Next task:** 1.13, the `db` host and role. "Before db" is finished (2026-11-02): fw-ips was rebuilt from code twice, the inventory is dynamic, and the DB password exists in SSM.
+- **Next task:** 1.14, the `app` host and role. 1.13 (`db`) is done (2026-11-02). Mailbridge is being prepared for deployment in its own repo (`docs/deployment.md` there); its env vars, secret formats and the ADR 0008 role question feed 1.14.
 
 ## Before db (agreed 2026-11-02)
 
@@ -46,7 +46,7 @@ End every session with: Claude saves `terraform -chdir=terraform/lab plan -var h
 - [ ] **VPN client exits on the laptop:** the `openvpn` client process ended twice on 2026-11-02 (about 11:40, and after a server restart) instead of reconnecting. Read the client's last log lines next time it happens.
 - [ ] **Own package mirror or proxy:** Marko wants to discuss this later. Parked until Tier 1 is finished; no design change yet.
 - [ ] **SSH over the VPN:** proposed as a daily-use path from the admin pool, with SSM kept for emergencies. Discuss after 1.9b; no design change yet.
-- [ ] **Mailbridge repo location:** where the source lives, so the image can be built and pushed to ECR. Needed for 1.14.
+- [~] **Mailbridge repo location:** a separate repo, being prepared for deployment (inventory and gaps in its `docs/deployment.md`, 2026-11-02). Still to decide in 1.14: where the image is built and pushed, the OAuth redirect URIs (the app uses `/accounts/callback/{gmail,outlook}`, not §6's `/oauth/callback`), `/mailbridge/session-secret`, and one or two DB roles (the app's ADR 0008).
 
 ---
 
@@ -125,9 +125,11 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Verify: `suricata -k none -r <pcap> -S <rules> --set unix-command.enabled=no` raises the expected alert; live traffic is dropped inline
 
 **db, app, proxy**
-- [ ] **1.13** `db` role: PostgreSQL, app user, access from the app host only · C
+- [x] **1.13** Built from code on 2026-11-02 and verified on db's side (decision 48); app→db and proxy→db are checked in 1.14 and 1.15. `db` role: PostgreSQL, app user, access from the app host only · C
   - Note: db reads `/mailbridge/db-password` with its own instance role and sets it on the host (decision 47)
-  - Note: 2026-11-02, step 1 (Terraform host and role) and 2a (`common` role) done and verified; 2b is the `db` role. The helper `set-db-password` sets the password through stdin, never argv, a file or an Ansible variable (decision 52)
+  - Note: 2026-11-02, built in three PRs: the Terraform host and role (37), the `common` role (38), the `db` role (39). The helper `set-db-password` sets the password through stdin, never argv, a file or an Ansible variable (decision 52)
+  - Verified 2026-11-02: second `site.yml` run `changed=0` on both hosts; PostgreSQL listens on 10.0.4.10 and 127.0.0.1 only; the SSM password logs in as `mailbridge` and a wrong one fails; `postgres` over TCP and `mailbridge` to another database get `no pg_hba.conf entry`; the role isn't superuser and can't create roles or databases; the password is stored as `SCRAM-SHA-256`; the value appears 0 times in the `-v` run log and the PostgreSQL logs; the IAM simulator allows only `/mailbridge/db-password`. From the admin pool, with a route to 10.0.4.0/24 added by hand (the pool gets no such route), `nc` to 5432 times out and fw-ips logs `FW-DROP` from 10.8.1.10
+  - Note: the laptop needs the collections in `ansible/requirements.yml` (`ansible-galaxy collection install -r requirements.yml`)
   - Verify (decision 48, db side only): PostgreSQL listens on 10.0.4.10:5432; `pg_hba` allows only the app user from 10.0.3.10/32 with `scram-sha-256`; a local login with the SSM value works; `nc -zv -w 3 10.0.4.10 5432` from the VPN admin pool times out and fw-ips logs the drop; the IAM simulator allows only `/mailbridge/db-password`. "Connect from app" moves to 1.14 and "refused from proxy" to 1.15
 - [ ] **1.14** `app` role: Mailbridge from ECR pinned by digest, listening on 3000, secrets from SSM · C
   - Verify: `docker inspect` shows the pinned digest; port 3000 reachable from proxy, unreachable from the VPN directly; `psql` to 10.0.4.10 as the app user connects (decision 48)
