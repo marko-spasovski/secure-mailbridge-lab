@@ -22,6 +22,7 @@ module "security" {
 module "compute" {
   source = "../modules/compute"
 
+  fw_enabled     = var.fw_enabled
   fw_ami_id      = var.fw_ami_id
   fw_eni_id      = module.network.fw_eni_id
   fw_private_ip  = module.network.fw_private_ip
@@ -35,12 +36,20 @@ data "aws_route53_zone" "lab" {
 
 # VPN clients connect to vpn.<domain>, never to an address, so profiles
 # survive a new Elastic IP (ARCHITECTURE.md §3). allow_overwrite lets
-# Terraform take over the record made by hand.
+# Terraform take over the record made by hand. Removed with fw-ips, so the
+# name never points at a released address that someone else may now hold.
 resource "aws_route53_record" "vpn" {
+  count = var.fw_enabled ? 1 : 0
+
   zone_id         = data.aws_route53_zone.lab.zone_id
   name            = "vpn.${var.domain}"
   type            = "A"
   ttl             = 60
   records         = [module.compute.fw_public_ip]
   allow_overwrite = true
+}
+
+moved {
+  from = aws_route53_record.vpn
+  to   = aws_route53_record.vpn[0]
 }

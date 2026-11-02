@@ -216,7 +216,7 @@ For each: attack → detection (or miss) → custom rule/fix → re-test.
 ## 12. Cost control
 
 - AWS Budget alert at **$20** on day one
-- `terraform destroy` when not in use (stopped VMs still pay for disks + public IP). Exception: during the fw-ips hand build, stop the instance and release the Elastic IP, until Ansible can rebuild it
+- `terraform destroy` when not in use (stopped VMs still pay for disks + public IP). Between sessions, `terraform apply -var fw_enabled=false` removes fw-ips, its Elastic IP and the `vpn` record; the network stays up (decision 16). Each session starts with `terraform apply` and `ansible-playbook site.yml` (decision 41)
 - Approx. compute ~$0.15/hour for the full set — a few hours per week stays within credits (verify in AWS Pricing Calculator)
 
 ---
