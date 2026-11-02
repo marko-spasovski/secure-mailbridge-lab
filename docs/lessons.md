@@ -524,6 +524,18 @@ The first Ansible run failed at the OpenVPN keys. The `aws` CLI snap had been in
 
 With the instance, Elastic IP and record in Terraform state, releasing the IP by hand would have been drift. Now `terraform apply -var fw_enabled=false` destroys exactly four resources at the end of a session (decision 41). The `vpn` record goes too, so the name never points at a released address that someone else might be given. Adding `count` changes each resource's address, so `moved` blocks tell Terraform these are the same resources, not new ones; without them the plan would have replaced the running fw-ips.
 
+### Part 9: What "rebuild from zero" really means
+
+After the rebuild you asked whether Terraform and Ansible could now build everything from nothing. The honest answer was no, and why is worth understanding.
+
+Today proved one layer: fw-ips, given that everything it depends on already exists. The network and security layer is in code but has never been built from clean (decision 16 deferred that to 1.20). The `persistent` stack doesn't exist in code at all: the state bucket that Terraform itself stores its state in, the Route 53 zone the `vpn` record looks up, and the SSM parameters fw-ips pulls its keys from were all made by hand. If any of them disappeared, `terraform apply` would fail before building anything. Some things stay outside code on purpose: the offline CA, the NS delegation at the parent domain, the laptop tools and the untracked files.
+
+The lesson is to be precise about what a test proved. "fw-ips rebuilds from code" is true. "The lab rebuilds from code" isn't yet, and saying so is what tasks 1.2 and 1.20 are for.
+
+We also kept the fallback AMI for one more session. As a rollback it's done its job, but it's the only copy of the hand-built host, useful if a second rebuild reveals another gap like the `aws` CLI. It costs well under a dollar a month, because snapshots bill only the data stored. A rule with a clear end ("delete after the next rebuild passes") beats keeping things "just in case".
+
+Before `db`, the agreed order is: the second rebuild, small fixes (the `default` security group on the ENI, tighter IAM, rule 1000004), a decision on building the inventory from Terraform, and a decision on where the database password lives. Each is small, and each gets harder once more hosts exist.
+
 ### Mistakes and what they taught
 
 - **I assumed the AMI shipped the `aws` CLI.** It didn't. Write down facts you checked, not things you expect, and when you audit, list every kind of state: apt packages, snaps, files, services, runtime settings.
@@ -561,6 +573,8 @@ Full reasoning is in `rationale.md`, entries 36 to 41.
 12. What does a `moved` block do, and what happens without one when you add `count`?
 13. Why did the rebuild find a gap that a careful audit missed?
 14. Why remove the DNS record at the same time as the Elastic IP?
+15. What did today's rebuild prove, and what does it not prove yet?
+16. Why shouldn't Terraform naively create an SSM SecureString parameter?
 
 ### What comes next
 
