@@ -1,6 +1,26 @@
 ---
+# Roles are listed here, not as meta dependencies, so the order is visible
+# in one place: common first on every host, then the host's own role.
 - name: Configure fw-ips
   hosts: fw_ips
   become: true
   roles:
+    - common
     - fw_ips
+
+# Private hosts reach SSM only through fw-ips's NAT, which the play above
+# configures, so this play runs after it and first waits for the agent to
+# register (decision 50). Facts are gathered once the host answers.
+- name: Configure db
+  hosts: db
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Wait until db is reachable through SSM
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+
+    - name: Gather facts
+      ansible.builtin.setup:
+  roles:
+    - common

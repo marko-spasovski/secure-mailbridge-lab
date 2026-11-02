@@ -1,4 +1,4 @@
-# Managed by Ansible (fw_ips role). ARCHITECTURE section 3: apt over HTTPS
+# Managed by Ansible (common role). ARCHITECTURE section 3: apt over HTTPS
 # from the regional mirror, so port 80 is never needed. Packages are still
 # verified by the archive signature; HTTPS adds privacy and blocks tampering
 # with the package lists in transit.

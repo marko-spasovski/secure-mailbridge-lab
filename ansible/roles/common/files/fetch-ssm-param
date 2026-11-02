@@ -1,5 +1,5 @@
 #!/bin/sh
-# Managed by Ansible (fw_ips role). Decision 39.
+# Managed by Ansible (common role). Decision 39.
 # Usage: fetch-ssm-param <parameter> <dest> <mode> [check]
 # Pulls one parameter with this instance's own role and replaces <dest> only
 # if the value differs. Prints "changed" or "unchanged", never the value.

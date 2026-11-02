@@ -1,0 +1,14 @@
+---
+# Baseline for every host (ARCHITECTURE.md section 3, "All instances").
+# site.yml runs this role before each host's own role.
+- name: Set up apt and security updates
+  ansible.builtin.import_tasks: base.yml
+
+- name: Bring every package up to date
+  ansible.builtin.import_tasks: upgrade.yml
+
+- name: Harden sshd
+  ansible.builtin.import_tasks: sshd.yml
+
+- name: Install the SSM tooling
+  ansible.builtin.import_tasks: ssm.yml
