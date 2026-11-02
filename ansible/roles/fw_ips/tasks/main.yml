@@ -1,3 +1,6 @@
 ---
 - name: Harden sshd
   ansible.builtin.import_tasks: sshd.yml
+
+- name: Configure forwarding and the firewall
+  ansible.builtin.import_tasks: network.yml
