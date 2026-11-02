@@ -17,7 +17,7 @@ it is verified, and the relevant doc section is updated.
 
 ## Before db (agreed 2026-11-02)
 
-1. [ ] **Session routine and second rebuild from code.** Commands, from the repo root:
+1. [x] **Session routine and second rebuild from code.** Passed 2026-11-02: every check below as expected, and the fallback AMI and snapshot are deleted. The first apply hit a race (the Elastic IP association ran while the instance was pending); a second apply finished it and the fix is `depends_on` in item 2. Commands, from the repo root, kept as the start-of-session routine:
    - `aws login`, then `aws sts get-caller-identity --query Arn --output text` (ends in `marko-admin`)
    - `ssh-add ~/.ssh/mailbridge-lab-ansible`
    - Claude saves the plan: `terraform -chdir=terraform/lab plan -out=<scratchpad>/on.tfplan` (expect 4 to add: instance, Elastic IP, association, `vpn` record). Marko runs `! cd terraform/lab && terraform apply <scratchpad>/on.tfplan`
@@ -27,7 +27,7 @@ it is verified, and the relevant doc section is updated.
    - Connect the VPN; `ping -c 3 10.0.1.10`; `dig +short @10.0.1.10 mail.<domain>` (expect `10.0.2.10`)
    - `terraform -chdir=terraform/lab plan` (expect no changes)
    - If all pass: delete the fallback AMI and its snapshot, with Marko's OK
-2. [ ] **Small fixes, one PR each:** remove `default` from the fw-ips ENI (§4); tighten the fw-ips role description and use the account ID instead of `*` in its grant; rule 1000004 `flow:to_server`, written by Marko and reviewed by Claude.
+2. [ ] **Small fixes, one PR each:** `depends_on = [aws_instance.fw]` on the Elastic IP association (found in item 1); remove `default` from the fw-ips ENI (§4); tighten the fw-ips role description and use the account ID instead of `*` in its grant; rule 1000004 `flow:to_server`, written by Marko and reviewed by Claude.
 3. [ ] **Inventory from Terraform:** decide between the `aws_ec2` dynamic inventory and generating `hosts.yml` from `terraform output`, before more hosts make hand-edited IDs error-prone.
 4. [ ] **Where `db`'s password lives** (part of 1.2): Terraform stores parameter values in state, so decide how `/mailbridge/db-password` is created. Consider importing the hand-built `persistent` pieces at the same time.
 
@@ -36,7 +36,7 @@ End every session with: Claude saves `terraform -chdir=terraform/lab plan -var f
 ## Open items
 
 - [~] **Delegate the subdomain:** zone and NS records built by hand and verified with `dig`, parent MX unchanged. Import the zone in 1.2.
-- [ ] **Fallback AMI:** keep `mailbridge-lab-fw-ips-handbuilt-2026-11-02` and its snapshot until the next session's rebuild from code also passes every check, then delete both. It's the only copy of the hand-built host, for inspecting anything the role may still miss.
+- [x] **Fallback AMI:** deleted with its snapshot on 2026-11-02 after the second rebuild passed. It was: keep `mailbridge-lab-fw-ips-handbuilt-2026-11-02` and its snapshot until the next session's rebuild from code also passes every check, then delete both. It's the only copy of the hand-built host, for inspecting anything the role may still miss.
 - [x] **Session routine (decision 41, replaces decision 24):**
   - Start: `terraform -chdir=terraform/lab apply`, then put `terraform -chdir=terraform/lab output -raw fw_instance_id` into `ansible/inventories/aws/hosts.yml`, wait for `cloud-init status` = `done`, run `ansible-playbook site.yml` from `ansible/`, and connect the VPN.
   - End: `terraform -chdir=terraform/lab apply -var fw_enabled=false`, then check that no instance or Elastic IP is left.
