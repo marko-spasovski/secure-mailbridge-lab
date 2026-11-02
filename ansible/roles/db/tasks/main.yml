@@ -56,6 +56,15 @@
   become: true
   become_user: postgres
 
+# The app's runtime role (decision 54, the app's ADR 0008): row access only,
+# granted by the app host after each migration. Owns nothing.
+- name: Create the mailbridge_app role
+  community.postgresql.postgresql_user:
+    name: mailbridge_app
+    role_attr_flags: LOGIN,NOSUPERUSER,NOCREATEDB,NOCREATEROLE,NOREPLICATION,NOBYPASSRLS
+  become: true
+  become_user: postgres
+
 # Installed even in check mode, so the task below can compare.
 - name: Install the password helper
   ansible.builtin.copy:
@@ -66,14 +75,21 @@
     mode: "0755"
   check_mode: false
 
-# db pulls the password with its own role and sets it on the host; Ansible
-# sees only "changed" or "unchanged" (decisions 47, 52). check_mode false:
-# the helper's "check" argument makes it read-only.
-- name: Set the mailbridge password from SSM
+# db pulls each password with its own role and sets it on the host; Ansible
+# sees only "changed" or "unchanged" (decisions 47, 52, 54). check_mode
+# false: the helper's "check" argument makes it read-only.
+- name: Set the role passwords from SSM
   ansible.builtin.command:
     argv:
       - /usr/local/sbin/set-db-password
+      - "{{ item.role }}"
+      - "{{ item.param }}"
       - "{{ 'check' if ansible_check_mode else '' }}"
+  loop:
+    - { role: mailbridge, param: /mailbridge/db-password }
+    - { role: mailbridge_app, param: /mailbridge/db-app-password }
+  loop_control:
+    label: "{{ item.role }}"
   register: db_password_set
   changed_when: db_password_set.stdout == "changed"
   check_mode: false

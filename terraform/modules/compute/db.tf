@@ -3,7 +3,7 @@
 # Same trust policy and SSM baseline as fw-ips (decision 22).
 resource "aws_iam_role" "db" {
   name               = "${var.name}-db"
-  description        = "db instance role: SSM agent, and reads /mailbridge/db-password only"
+  description        = "db instance role: SSM agent, and reads the two DB passwords only"
   assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
 }
 
@@ -12,16 +12,20 @@ resource "aws_iam_role_policy_attachment" "db_ssm_min" {
   policy_arn = aws_iam_policy.ssm_min.arn
 }
 
-# db pulls its own password on the host, so the value never passes through
-# the laptop or Ansible output (decision 47). One exact ARN, no wildcard:
-# other /mailbridge/* secrets belong to app. The aws/ssm key needs no grant
-# here; its key policy allows use through SSM by principals IAM allows.
+# db pulls its own passwords on the host, so the values never pass through
+# the laptop or Ansible output (decision 47): the owner's and the runtime
+# role's (decision 54). Exact ARNs, no wildcard: the other /mailbridge/*
+# secrets belong to app. The aws/ssm key needs no grant here; its key policy
+# allows use through SSM by principals IAM allows.
 data "aws_iam_policy_document" "db_password" {
   statement {
-    sid       = "ReadDbPassword"
-    effect    = "Allow"
-    actions   = ["ssm:GetParameter"]
-    resources = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/mailbridge/db-password"]
+    sid     = "ReadDbPasswords"
+    effect  = "Allow"
+    actions = ["ssm:GetParameter"]
+    resources = [
+      "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/mailbridge/db-password",
+      "arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/mailbridge/db-app-password",
+    ]
   }
 }
 

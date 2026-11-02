@@ -25,3 +25,19 @@
   roles:
     - common
     - db
+
+# Same pattern as db (decision 50). The app role comes with the image
+# (task 1.14).
+- name: Configure app
+  hosts: app
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Wait until app is reachable through SSM
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+
+    - name: Gather facts
+      ansible.builtin.setup:
+  roles:
+    - common
