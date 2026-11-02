@@ -126,11 +126,12 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
 
 **db, app, proxy**
 - [ ] **1.13** `db` role: PostgreSQL, app user, access from the app host only · C
-  - Verify: connect succeeds from app, is refused from proxy
+  - Note: db reads `/mailbridge/db-password` with its own instance role and sets it on the host (decision 47)
+  - Verify (decision 48, db side only): PostgreSQL listens on 10.0.4.10:5432; `pg_hba` allows only the app user from 10.0.3.10/32 with `scram-sha-256`; a local login with the SSM value works; `nc -zv -w 3 10.0.4.10 5432` from the VPN admin pool times out and fw-ips logs the drop; the IAM simulator allows only `/mailbridge/db-password`. "Connect from app" moves to 1.14 and "refused from proxy" to 1.15
 - [ ] **1.14** `app` role: Mailbridge from ECR pinned by digest, listening on 3000, secrets from SSM · C
-  - Verify: `docker inspect` shows the pinned digest; port 3000 reachable from proxy, unreachable from the VPN directly
+  - Verify: `docker inspect` shows the pinned digest; port 3000 reachable from proxy, unreachable from the VPN directly; `psql` to 10.0.4.10 as the app user connects (decision 48)
 - [ ] **1.15** `proxy` role: Nginx, TLS, rate limit, ModSecurity v3 + CRS, `certbot-dns-route53` (staging) · C
-  - Verify: `curl -k https://mail.<domain>` over VPN returns 200; `?id=1' OR '1'='1` gets 403 and is in the audit log
+  - Verify: `curl -k https://mail.<domain>` over VPN returns 200; `?id=1' OR '1'='1` gets 403 and is in the audit log; `nc -zv -w 3 10.0.4.10 5432` from proxy times out (decision 48)
 
 **siem**
 - [ ] **1.16** `siem` role: Wazuh manager, indexer, dashboard · C

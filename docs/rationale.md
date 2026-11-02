@@ -619,3 +619,51 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** Terraform can't detect drift in the value, because it never knows it. A new random value is generated on every run but sent only when `value_wo_version` changes, so rotating means bumping the version and then re-running the `db` and `app` roles. The password is letters and digits only, 40 of them (about 238 bits), so it never needs escaping in a connection string. It uses the AWS-managed `aws/ssm` key like `/vpn/*`; checkov's CMK check is skipped with that reason. `persistent` uses the same state bucket as `lab` under its own key, so a lab teardown can't reach it.
 
 **Verify once built.** The plan shows `1 to add`, with `value_wo` as `(write-only attribute)`, and `terraform show -json` of the saved plan contains no `value_wo` or `value`. After apply, `aws ssm describe-parameters` lists `/mailbridge/db-password` as `SecureString`, and the state (`terraform state pull`) has `value_wo` null and no password. Reading the value back works only for the admin, and later for the `db` and `app` roles.
+
+## 47. How the `db` host gets its password (2026-11-02)
+
+**Problem.** Decision 46 put the DB password in SSM, where nobody has seen it. PostgreSQL needs it to set the password of the app's database user, and later `app` needs it to connect. Something has to carry the value from SSM to the db host, and every component it passes through is another place it can leak: memory, logs, terminal output.
+
+**Options.** A: db reads it with its own instance role, granted that one parameter, and a helper on the host sets the password without printing it. B: Ansible reads it on the laptop with the `aws_ssm` lookup and pushes it over the SSM tunnel, hidden with `no_log`. C: no password at all; the app authenticates with a client certificate.
+
+**Chosen: A.** It is the pull pattern from decision 39, already proven on fw-ips: the instance role gives temporary credentials through IMDSv2, and the value goes from SSM straight into PostgreSQL on the same host. The laptop never holds it. B puts the value inside the laptop's Ansible process, where one missing `no_log` or a `-vvv` run prints it. C is stronger but needs a second PKI (or reuse of the VPN CA) and certificate handling in the app, which is too much for Tier 1. It stays a possible hardening finding.
+
+**Trade-off accepted.** db can read the password for its whole life, not only during setup. That adds little, because db already holds what the password protects, and PostgreSQL keeps only a SCRAM-SHA-256 hash of it. The grant names one ARN with the account and region from data sources (decision 43). The `aws/ssm` key needs no extra KMS grant, because its key policy allows use through SSM by any principal in the account that IAM allows. §7 no longer lists the S3 backup grant for db; T2.3 adds it with the bucket.
+
+**Verify once built.** The IAM policy simulator allows the db role `ssm:GetParameter` on `/mailbridge/db-password` and denies `/mailbridge/` siblings and `/vpn/*`. An Ansible run shows no password in its output, even with `-v`. On db, a login as the app user with the SSM value works, and a wrong password fails.
+
+## 48. Verifying `db` before `app` and `proxy` exist (2026-11-02)
+
+**Problem.** Task 1.13's check was "connect succeeds from app, is refused from proxy", but the build order (§13) puts db first, so neither host exists. Three layers decide whether a connection reaches PostgreSQL: the network (sg-db and the data NACL), PostgreSQL's listener (`listen_addresses`), and `pg_hba.conf` (which address may log in as which user, and how). A good test shows which layer allowed or refused.
+
+**Options.** A: split the check. 1.13 proves db's own layers, 1.14 adds the app connection, 1.15 the proxy refusal. B: throwaway probe VMs with sg-app and sg-proxy, deleted after the test. C: create bare app and proxy instances in Terraform now, without their roles.
+
+**Chosen: A.** Each host is tested against its real dependency, as §13 says, and no resource exists outside code. B would prove the whole path today for a few cents, but it is a hand build, and the last temporary VM launched with the wrong role (2026-11-01). C builds two layers early and leaves their IAM half-done until their own tasks.
+
+**Trade-off accepted.** Until 1.14, the app→db network path is proven only on paper: the sg-db and data NACL rules were checked line by line against §4 in 1.4, but no packet has crossed them. If 1.14 fails, the cause could be in db or the network, and the layered checks below narrow it down.
+
+**Verify once built.** On db: `ss -ltn` shows PostgreSQL on 10.0.4.10:5432 (and loopback), and the `pg_hba` file allows only the app user to its database from 10.0.3.10/32 with `scram-sha-256`. A local login with the SSM value works. From the VPN admin pool, `nc -zv -w 3 10.0.4.10 5432` times out, and fw-ips logs the drop. In 1.14, `psql` from app connects. In 1.15, the same command from proxy times out.
+
+## 49. What happens to the database between sessions (2026-11-02)
+
+**Problem.** Decision 41 destroys every paid instance at the end of a session. fw-ips holds no state, but db keeps PostgreSQL's data on its root disk, so destroying the instance deletes the data. The underlying idea is the split between compute and state: servers should be disposable, while data has its own lifecycle on a separate volume or in backups.
+
+**Options.** A: accept an empty database each session until T2.3 brings backups and a restore. B: a separate EBS data volume (about 5 GB, about $0.50 a month) mounted at `/var/lib/postgresql` and reattached to each new instance. C: stop db between sessions instead of destroying it.
+
+**Chosen: A.** Tier 1 uses only test accounts in testing mode, so an empty database costs a minute of re-linking per account. Each session then proves that db builds from clean, the same way fw-ips does. T2.3 adds nightly `pg_dump` to S3 and a tested restore, and restoring at session start becomes a real recovery drill rather than a disk that never goes away. B is the production pattern, but it adds a volume lifecycle, a stack to own it, a mount in Ansible and a guard so `initdb` never runs over existing data, which is too much for the first private host. C goes back to a host carried by hand between sessions, the problem decision 41 removed.
+
+**Trade-off accepted.** Nothing in the database survives a session: app users, linked mailboxes and stored tokens are recreated each time. A Phase 2 scenario that needs data across several days would have to wait for T2.3 or bring B forward. This is revisited at 1.14 if re-linking proves a burden.
+
+**Verify once built.** After an end-of-session teardown, no db instance or volume is left (`aws ec2 describe-volumes` filtered by `Project=mailbridge-lab` is empty). At the next start, the `db` role creates the user and database again, and the login from decision 48 works with the same SSM password.
+
+## 50. Boot order for private hosts (2026-11-02)
+
+**Problem.** A session starts with one `terraform apply`, which now creates fw-ips and db together. fw-ips forwards nothing until Ansible installs its nftables NAT rules, after the apply. For its first minutes db has no route out: a `package_upgrade` in its cloud-init would fail and leave `cloud-init status` at `error`, and its SSM agent can't register, so Ansible can't reach it yet. The concept is the split of duties: Terraform makes resources exist, and Ansible makes hosts behave. Order between hosts' configuration is a configuration concern.
+
+**Options.** A: one apply; db's first boot needs no network, `site.yml` runs the `fw_ips` play first, and the `db` play waits for the connection before its role upgrades the host. B: two applies, fw-ips first, then the private hosts behind a second switch. C: keep `package_upgrade` in db's cloud-init and add a `bootcmd` loop that waits for the network.
+
+**Chosen: A.** Ansible already runs plays in order, so the dependency is written where it belongs, and the SSM agent's own retries cover the gap until NAT works. The session routine keeps one plan and one approval. B doubles the plans and approvals each session and adds a variable the Makefile (0.6) would have to sequence. C hides a fw-ips failure as a vague cloud-init timeout on another host.
+
+**Trade-off accepted.** db is upgraded by its role instead of at first boot, unlike fw-ips; each method fits its host, because fw-ips has internet at boot and db doesn't. The first `site.yml` run on a fresh session takes longer while it waits for db to register. `wait_for_connection` has a timeout, so a broken fw-ips fails the db play with a clear message instead of hanging.
+
+**Verify once built.** After the apply, `cloud-init status` on db reports `done`, not `error`. The first `site.yml` shows the `fw_ips` play, then the `db` play waiting and connecting. `apt list --upgradable` on db is empty after the run, and the second run reports `changed=0`.
