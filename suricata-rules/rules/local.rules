@@ -20,5 +20,6 @@ alert tls 10.8.0.0/23 any -> 10.0.2.10 443 (msg:"MAILBRIDGE TLS 1.0 client to pr
 alert tls 10.8.0.0/23 any -> 10.0.2.10 443 (msg:"MAILBRIDGE unexpected TLS server name"; flow:established,to_server; tls.sni; content:!"mail."; startswith; classtype:policy-violation; sid:1000003; rev:1;)
 
 # Connection flood from one client. The only rule that blocks: a first
-# threshold, to tune in scenario 2.2.
-drop tcp 10.8.0.0/23 any -> 10.0.2.10 443 (msg:"MAILBRIDGE connection flood to proxy"; flags:S; detection_filter:track by_src, count 60, seconds 10; classtype:attempted-dos; sid:1000004; rev:1;)
+# threshold, to tune in scenario 2.2. to_server without "established",
+# because a SYN arrives before the handshake has completed.
+drop tcp 10.8.0.0/23 any -> 10.0.2.10 443 (msg:"MAILBRIDGE connection flood to proxy"; flow:to_server; flags:S; detection_filter:track by_src, count 60, seconds 10; classtype:attempted-dos; sid:1000004; rev:2;)
