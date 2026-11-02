@@ -80,7 +80,7 @@ All instances: IMDSv2 required · SSM agent (admin access; Ansible uses SSH tunn
 
 - fw-ips: runs Ubuntu 24.04 LTS (official Canonical AMI, x86_64).
 - fw-ips: its Elastic IP belongs to the `lab` stack and exists only during a session. Clients connect to `vpn.<domain>` (TTL 60), which `lab` updates on each apply.
-- app: pulls the Mailbridge image from ECR with its instance role, pinned by digest (`image@sha256:...`).
+- app: pulls the Mailbridge image from ECR with its instance role, pinned by digest (`image@sha256:...`). The `mailbridge` repository is in `persistent`, with immutable tags, scanning on push and a lifecycle policy (decision 53).
 - proxy: Certbot authenticates to Route 53 with its instance role; no stored DNS credentials.
 
 ---

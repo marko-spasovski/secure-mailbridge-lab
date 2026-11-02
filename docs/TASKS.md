@@ -81,6 +81,7 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
 - [ ] **1.2** `terraform/persistent`: state bucket, backup bucket, flow log bucket, Route 53 zone, ECR repository, VPN CA + secrets · C
   - Note: `/vpn/ca/*` was created by hand. Don't import `/vpn/ca/key` without a plan for its value, because Terraform stores parameter values in state.
   - Note: started 2026-11-02 with `/mailbridge/db-password` only (decision 46). The stack uses the same state bucket under its own key, `persistent/terraform.tfstate`.
+  - Note: the `mailbridge` ECR repository added 2026-11-02 (decision 53)
   - Verify: Marko reviews `terraform plan` before any apply; no secret values in the repo or in plan output
 
 **Network (free resources)**
