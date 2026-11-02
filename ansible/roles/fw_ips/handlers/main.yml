@@ -46,8 +46,8 @@
 # even when the engine refuses, so success is read from the reply.
 - name: Reload Suricata rules
   ansible.builtin.command: suricatasc -c reload-rules
-  register: suricata_reload
-  until: suricata_reload.stdout is search('"return":\s*"OK"')
+  register: fw_ips_suricata_reload
+  until: fw_ips_suricata_reload.stdout is search('"return":\s*"OK"')
   retries: 12
   delay: 10
   changed_when: true
