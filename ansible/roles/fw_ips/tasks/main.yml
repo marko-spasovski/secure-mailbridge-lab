@@ -7,3 +7,6 @@
 
 - name: Configure DNS for VPN clients and private subnets
   ansible.builtin.import_tasks: dns.yml
+
+- name: Run Suricata inline
+  ansible.builtin.import_tasks: suricata.yml
