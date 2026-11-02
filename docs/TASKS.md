@@ -13,7 +13,7 @@ it is verified, and the relevant doc section is updated.
 ## Current position
 
 - **Phase:** 1, Tier 1 on AWS (0.6 and 0.7 still open)
-- **Next task:** 1.6 and the `fw_ips` role, turning the hand build into code. 1.6, 1.7b, 1.8, 1.9a, 1.9b, 1.10, 1.11 and 1.12 are hand-verified; their code is still to do.
+- **Next task:** 1.6, the Terraform for fw-ips (instance, role, Elastic IP, `vpn` record), then the rebuild test. The `fw_ips` role covers everything built by hand (2026-11-02).
 
 ## Open items
 
@@ -21,6 +21,7 @@ it is verified, and the relevant doc section is updated.
 - [ ] **Each session during the fw-ips hand build:** start by allocating an Elastic IP, associating it with the ENI, starting fw-ips and updating the `vpn` record; end by stopping fw-ips and releasing the Elastic IP (decision 24).
 - [x] **Ansible over SSM:** decided: SSH tunnelled through SSM with a laptop-only key (decision 36). fw-ips gets the public key once through SSM, because it was launched without a key pair.
 - [x] **Suricata upkeep:** daily `suricata-update.timer` with `reload-rules`; the refusal was a test run replacing the command socket (decision 38).
+- [ ] **VPN client exits on the laptop:** the `openvpn` client process ended twice on 2026-11-02 (about 11:40, and after a server restart) instead of reconnecting. Read the client's last log lines next time it happens.
 - [ ] **Own package mirror or proxy:** Marko wants to discuss this later. Parked until Tier 1 is finished; no design change yet.
 - [ ] **SSH over the VPN:** proposed as a daily-use path from the admin pool, with SSM kept for emergencies. Discuss after 1.9b; no design change yet.
 - [ ] **Mailbridge repo location:** where the source lives, so the image can be built and pushed to ECR. Needed for 1.14.
@@ -79,9 +80,9 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Verify: `tflint` and `checkov` pass; plan shows `http_tokens = "required"`; the IAM simulator denies the fw-ips role `ssm:GetParameter` on `/vpn/ca/*` and `/mailbridge/*`; `aws ssm start-session` connects; `dig vpn.<domain> +short` matches the Elastic IP
 - [x] **1.7a** Offline CA on the laptop with easy-rsa, outside the repo: CA, CRL, encrypted key backed up to SSM under `/vpn/` · M+C
   - Verify: `pki/private/ca.key` starts with `ENCRYPTED PRIVATE KEY`; `openssl crl -in pki/crl.pem -noout -nextupdate` shows a future date; the SSM parameter exists as `SecureString`
-- [~] **1.7b** Hand build verified; the `fw_ips` role part is still to do. Fetch parameters through a pipe, because the snap `aws` wrote 0 bytes when stdout was a file. Sign the server cert and one cert per device on the laptop, revoke a test cert, and have the `fw_ips` role install only the public files, server key and CRL · M+C
+- [x] **1.7b** Hand build verified; the `fw_ips` role pulls the five files from `/vpn/fw-ips/*` with the instance role (decision 39). Fetch parameters through a pipe, because the snap `aws` wrote 0 bytes when stdout was a file. Sign the server cert and one cert per device on the laptop, revoke a test cert, and have the `fw_ips` role install only the public files, server key and CRL · M+C
   - Verify: `openssl crl -in crl.pem -noout -text` lists a test-revoked serial; no CA private key exists on fw-ips
-- [~] **1.8** Hand build verified; the `fw_ips` role part is still to do. `fw_ips` role: OpenVPN server, §5 hardening, `client-config-dir` pools, profiles using `vpn.<domain>` · C
+- [x] **1.8** Hand build verified; `tasks/openvpn.yml` installs `server.conf` and `ccd/marko-laptop` (2026-11-02). `fw_ips` role: OpenVPN server, §5 hardening, `client-config-dir` pools, profiles using `vpn.<domain>` · C
   - Verify: user cert gets 10.8.0.x, admin cert gets 10.8.1.x
 - [x] **1.9a** nftables: forwarding and NAT for private subnets · **C** (Marko explicitly asked Claude to write this one)
   - Note: verified by hand with a temporary VM. The files are in `ansible/roles/fw_ips/files/`; `tasks/network.yml` installs them (2026-11-02, live rules unchanged by checksum).
@@ -90,9 +91,9 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
 - [x] **1.9b** Core nftables ruleset: full §4 policy on top of 1.9a · **C** (Marko explicitly asked Claude to write this one)
   - Note: verified by hand, including a reboot. No proxy exists yet, so 443 was shown as not dropped; a working connection is proved in 1.15. `tasks/network.yml` installs the files.
   - Verify: `nft list ruleset`; user pool reaches only 10.0.2.10:443, other traffic is dropped and logged; SSM still `Online`
-- [~] **1.10** Hand build verified for admin and user pools, including a reboot. Unbound is in the role (`tasks/dns.yml`); the pushed route waits for the OpenVPN part. `fw_ips` role: Unbound with the private `mail.<domain>` record; push a route to 10.0.1.10/32 to VPN clients (decision 27) · C
+- [x] **1.10** Hand build verified for admin and user pools, including a reboot. Unbound is in `tasks/dns.yml`, and the pushed route is in the role's `server.conf`. `fw_ips` role: Unbound with the private `mail.<domain>` record; push a route to 10.0.1.10/32 to VPN clients (decision 27) · C
   - Verify: `dig @10.0.1.10 mail.<domain> +short` from the VPN returns 10.0.2.10
-- [~] **1.11** Hand build verified, including fail-closed and a reboot, using 528 MB of RAM with ET Open; the `fw_ips` role part is still to do. `fw_ips` role: Suricata install, NFQUEUE wiring, `eve.json` · C
+- [x] **1.11** Hand build verified, including fail-closed and a reboot, using 528 MB of RAM with ET Open; `tasks/suricata.yml` installs it (2026-11-02). `fw_ips` role: Suricata install, NFQUEUE wiring, `eve.json` · C
   - Note: the role owns the whole `suricata.yaml`, installed with `copy` (decision 37)
   - Verify: `suricata -T` passes; `sudo tail -f eve.json` shows flows while using the VPN
 - [x] **1.12** Custom Suricata rules and test pcaps · **C** (Marko explicitly asked Claude to write these)

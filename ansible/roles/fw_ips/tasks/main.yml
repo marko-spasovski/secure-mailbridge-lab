@@ -10,3 +10,6 @@
 
 - name: Run Suricata inline
   ansible.builtin.import_tasks: suricata.yml
+
+- name: Run the OpenVPN server
+  ansible.builtin.import_tasks: openvpn.yml

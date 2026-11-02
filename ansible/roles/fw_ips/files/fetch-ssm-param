@@ -1,0 +1,28 @@
+#!/bin/sh
+# Managed by Ansible (fw_ips role). Decision 39.
+# Usage: fetch-ssm-param <parameter> <dest> <mode> [check]
+# Pulls one parameter with this instance's own role and replaces <dest> only
+# if the value differs. Prints "changed" or "unchanged", never the value.
+# With "check", reports what would change and writes nothing.
+set -eu
+name=$1 dest=$2 mode=$3 check=${4:-}
+
+# mktemp creates the file as 0600, in the same directory, so mv is atomic.
+tmp=$(mktemp "$dest.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+
+# Pipe into cat: the snap aws writes 0 bytes when stdout is a file (1.7b).
+/snap/bin/aws ssm get-parameter --region eu-central-1 --name "$name" \
+  --with-decryption --query Parameter.Value --output text | cat > "$tmp"
+# Without pipefail a failed aws call leaves an empty file, so check for that.
+[ -s "$tmp" ] || { echo "empty or unreadable: $name" >&2; exit 1; }
+
+if [ -f "$dest" ] && cmp -s "$tmp" "$dest"; then
+  echo unchanged
+elif [ "$check" = check ]; then
+  echo changed
+else
+  chmod "$mode" "$tmp"
+  mv "$tmp" "$dest"
+  echo changed
+fi

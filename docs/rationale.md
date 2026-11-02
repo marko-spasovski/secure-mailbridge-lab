@@ -521,3 +521,15 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** During an update the `-T` test loads ET Open a second time, about 500 MB, next to the running engine's 530 MB, on a host with 2 GB. A reload also holds the old and new engines briefly. A forced update on 2026-11-02 left 209 MB available at its lowest point: it works, but it's the tightest moment on this host and must be re-measured when the Wazuh agent arrives in 1.17, with t3.medium as the fallback. A ruleset that passes `-T` but behaves badly still loads automatically.
 
 **Verify once built.** `systemctl list-timers suricata-update.timer` shows the next run; a manual start of the service logs a download, a test and a reload; `suricatasc -c ruleset-reload-time` shows a new time; `suricatasc -c version` still answers.
+
+## 39. Who fetches the VPN secrets (2026-11-02)
+
+**Problem.** The `fw_ips` role must put five files on fw-ips: the CA cert, server cert, server key, `tls-crypt` key and CRL. Two are secrets, held as SecureString under `/vpn/fw-ips/*`. None may reach the public repo or Ansible's output.
+
+**Options.** A: fw-ips pulls them with its own instance role. B: the laptop reads them with the `amazon.aws.ssm_parameter` lookup and pushes them with `copy`. C: Terraform `user_data`.
+
+**Chosen: A.** The host's role can already read `/vpn/fw-ips/*` and nothing else (decision 22), so the secret goes from SSM to the host and nowhere else. A small helper, `fetch-ssm-param`, pipes the value into a 0600 temp file in the same directory, because the snap `aws` writes 0 bytes to a file (1.7b). It compares the result with `cmp`, replaces the file with an atomic `mv` only if it differs, and prints only `changed` or `unchanged`. In check mode it only compares. Tasks also use `no_log`. B puts the key in laptop memory and the SSH channel, needs a collection and boto3 on the laptop, and `--diff` would print it unless disabled. C stores the secret in instance metadata that console users can read, and in Terraform state.
+
+**Trade-off accepted.** A shell helper instead of a pure Ansible module, and a dependency on the `aws` CLI snap shipped with the Ubuntu AMI. A failed `aws` call is caught by an empty-file check, since `sh` has no `pipefail`. Rotating a key means updating SSM and rerunning the role, which restarts OpenVPN and drops VPN clients for a few seconds; a CRL update needs no restart.
+
+**Verify once built.** A dry run on the hand-built host reports all five files unchanged; output shows only `censored due to no_log`; a second run reports `changed=0`; keys are 0600 root; a VPN client reconnects after the role restarts OpenVPN.

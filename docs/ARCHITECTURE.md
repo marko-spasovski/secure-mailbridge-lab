@@ -140,7 +140,7 @@ Baseline outbound: 110 TCP 443 to 0.0.0.0/0 · 120 UDP 123 to 0.0.0.0/0 · 130 U
 ## 5. VPN (OpenVPN)
 
 - Own PKI with easy-rsa · **one certificate per device** · revocation via CRL
-- **Offline CA:** the CA and all signing stay on Marko's laptop, outside the repo, with the key passphrase-protected. fw-ips holds only `ca.crt`, its server cert and key, the CRL and the `tls-crypt` key. The encrypted CA key is backed up to SSM under `/vpn/`, which no instance role can read.
+- **Offline CA:** the CA and all signing stay on Marko's laptop, outside the repo, with the key passphrase-protected. fw-ips holds only `ca.crt`, its server cert and key, the CRL and the `tls-crypt` key. The encrypted CA key is backed up to SSM under `/vpn/`, which no instance role can read. fw-ips pulls its five files from `/vpn/fw-ips/*` with its own instance role, so the values never pass through the admin laptop or Ansible output (decision 39). A CRL update needs no OpenVPN restart.
 - Per-client config (`client-config-dir`): user certs → dynamic pool in 10.8.0.0/24, admin cert → fixed address in 10.8.1.0/24. `ccd-exclusive` is off, so attribution of user IPs comes from OpenVPN connection logs in Wazuh
 - Hardening: `tls-crypt`, `data-ciphers AES-256-GCM`, `tls-version-min 1.3`, `crl-verify`, `user nobody`
 - Pushed: routes to 10.0.2.0/24 and 10.0.1.10/32 (users) or + 10.0.5.0/24 (admins), DNS 10.0.1.10
