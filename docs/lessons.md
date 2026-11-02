@@ -430,3 +430,138 @@ Full reasoning is in `rationale.md`, entries 25 to 35.
 ### What comes next
 
 fw-ips is finished by hand but exists only on one disk. Next, decide how Ansible connects over SSM, write the `fw_ips` role part by part, write 1.6, and rebuild fw-ips from code. Only then start `db`.
+
+## 2026-11-02
+
+### Today's topic: turning a hand-built server into code, and proving it
+
+Yesterday fw-ips worked, but it existed on one disk. If that disk had died, the lab's front door would have gone with it, along with every decision baked into its config files. Today you turned that host into code, Terraform for the AWS side and an Ansible role for everything inside it, and then did the thing that makes code trustworthy: you threw the original away and rebuilt it from the code alone.
+
+The rebuild found a gap that a careful audit had missed. That is the main lesson of the day.
+
+### The big picture
+
+Infrastructure as code has two halves. Terraform describes what exists in AWS: instances, addresses, roles and records. Ansible describes what's inside a host: packages, files and services. Neither is worth much until it has rebuilt something from nothing, because "the plan looks right" is a belief and "a fresh host passed every check" is evidence.
+
+The method we follow for every layer (decision 11) is: build by hand, test, compare with code, destroy, rebuild from code, re-test. Today fw-ips finished that loop.
+
+### Part 1: How Ansible reaches a host with no SSH port
+
+Ansible is agentless. For each task it connects, copies a small Python module, runs it and reads back JSON. Its normal transport is SSH, but no security group, NACL or nftables rule allows port 22, and none should.
+
+Every host already runs the SSM agent, which keeps an outbound 443 connection to AWS. `aws ssm start-session --document-name AWS-StartSSHSession` carries an SSH session inside that connection to sshd on the host's loopback. A `ProxyCommand` in the connection variables makes this automatic, so `ansible fw_ips -m ping` just works.
+
+We compared three options (decision 36). The `aws_ssm` connection plugin needs no SSH, but it moves files through an S3 bucket, which would have meant giving the instance role S3 access and undoing part of decision 22. SSH over the VPN would open port 22 in three places, and on fw-ips Ansible would be managing OpenVPN over OpenVPN: one bad push and the connection it runs on is gone.
+
+Two details are worth knowing:
+
+- **Two independent secrets.** Reaching a host needs an AWS session for SSM and the SSH key. A stolen laptop key alone reaches nothing.
+- **`IdentitiesOnly=yes`.** Your agent held five keys. By default SSH offers each one, and sshd disconnects after six failures. It would also have offered your unrelated keys to a lab host.
+
+Then we made sshd listen on `127.0.0.1` and `::1` only. Because the tunnel arrives on loopback, Ansible kept working, and a future firewall mistake would find nothing listening on the network. On Ubuntu 24.04 sshd is **socket-activated**: systemd opens port 22 itself, built from `ListenAddress` by a generator. So a config change needs `daemon-reload` and a restart of `ssh.socket`, not only of the service. We checked this on the host before writing the task, rather than assuming it.
+
+### Part 2: The safe way to bring a live host under configuration management
+
+fw-ips was already running and correct. The danger in writing a role for it is that the role quietly changes something. Each part followed the same pattern:
+
+1. Compare the repo file with the live file (checksums, then `diff`).
+2. Run `ansible-playbook --check --diff`, which shows what would change without changing it.
+3. Apply, then run again and expect `changed=0`.
+4. Check behaviour, not only files.
+
+This caught real drift. The live `nftables.conf`, Unbound config and OpenVPN drop-in differed from the repo only in comments, and the diff showed exactly that before anything was written. For nftables we went further: the loaded ruleset's checksum (`nft -s list ruleset`, without counters) was identical before and after, which proves the reload changed no rule.
+
+Some techniques that appeared along the way:
+
+- **`validate:`** on a `copy` task tests the new file before it replaces the old one (`sshd -t`, `nft -c`, `unbound-checkconf`, `suricata -T`). A broken file never goes live.
+- **`meta: flush_handlers`** runs pending handlers immediately. We used it so kernel forwarding is on before the firewall loads, and so the apt cache is refreshed before any package is installed.
+- **Handlers that share a `listen` name** run in order from one `notify`, which is how sshd gets `daemon-reload`, then a socket restart, then a service restart.
+- **`changed_when`** tells Ansible what "changed" means for a command, which can't know on its own.
+
+### Part 3: Owning a big upstream file
+
+`suricata.yaml` is 2,150 lines, and the hand build changed three of them. We chose to own the whole file (decision 37) and committed it in two steps: Ubuntu's untouched copy, then our edits. Now `git show` on the second commit shows exactly `HOME_NET`, the `eve` types and `local.rules`, which is easy to defend line by line. Targeted `lineinfile` edits would have been smaller but fragile, and `--set` overrides depend on list positions in someone else's file.
+
+Two side effects taught something. The upstream file contains `{%` inside a comment, which Jinja would read as a block, so it's installed with `copy`, not `template`. And `ansible-lint` flagged 270 style issues inside upstream's file, so that one file is excluded, with a comment saying why. Fixing someone else's style would have destroyed the clean diff.
+
+### Part 4: A mystery solved by testing a hypothesis
+
+Yesterday `suricatasc -c reload-rules` was refused, and the cause was unknown. The logs showed the refusal actually happened during a service stop, and a socket file existed with nothing listening on it. The hypothesis was that the `suricata -r <pcap>` tests from 1.12 open their own command socket at the same path, replacing the daemon's.
+
+We tested it: before an offline run, `suricatasc` answered; after it, `Connection refused`, and the socket file had a new inode. With `--set unix-command.enabled=no` the socket survived, and `suricata -T` never touched it. So the cause was the tests, not reloading (decision 38).
+
+There was a second lesson inside this one. After restarting Suricata, my first check said it was still broken, because I checked too early: Suricata opens its socket only after loading 53,000 rules, about 30 seconds after start. My "fix" test ran in that window and proved nothing, so we repeated it. A test that runs before the system is ready is not a result.
+
+Knowing the cause made the update design simple: a daily systemd timer runs `suricata-update`, which tests the new rules with `suricata -T` and then runs `reload-rules`. Reading `suricata-update`'s source showed it reloads only when rules changed, and restores the old rules if the test fails. A forced run kept the same Suricata process, so traffic never paused, unlike a restart, which stops forwarded traffic for about 30 seconds because Suricata fails closed. Measuring memory during the run found the tightest point: 209 MB free on a 2 GB host, because a reload briefly holds two rule engines alongside the test. That number is now in rationale 38, to recheck when Wazuh arrives.
+
+### Part 5: Secrets pulled, not pushed
+
+The OpenVPN server needs two secrets, the server key and the `tls-crypt` key. We chose to have fw-ips pull its own files with its instance role (decision 39) instead of having the laptop push them. The role can read `/vpn/fw-ips/*` and nothing else, so the secret goes from SSM to the host and nowhere else.
+
+A small helper does the work. It pipes the value into a 0600 temp file in the same directory (the pipe works around the snap `aws` writing 0 bytes to a file), compares it with the current file, and replaces it with an atomic `mv` only if it differs. It prints only `changed` or `unchanged`, and the tasks use `no_log`. In check mode it only compares. The dry run on the live host reported all five files unchanged, which proved the SSM copies and the live files were identical, without showing either.
+
+A CRL change needs no restart, because OpenVPN re-reads `crl-verify` on each new connection. A key change does restart OpenVPN, and that's safe because Ansible runs over SSM, not over the VPN it's restarting.
+
+### Part 6: Terraform for fw-ips, and a bug the plan revealed
+
+IAM was imported unchanged, written as `aws_iam_policy_document` blocks that match the live policies by meaning. The instance attaches the standalone ENI through `primary_network_interface`, the provider 6 replacement for the deprecated `network_interface` block. That was checked in the installed provider's schema, not assumed.
+
+The first plan showed `source_dest_check = true` on the new instance. On the primary interface, that flag is the ENI's own check, and with it on, AWS drops every packet fw-ips forwards. The provider refused an explicit `false` alongside `primary_network_interface`, so the fix is `ignore_changes = [source_dest_check]`, leaving the network module as the only owner. The second plan after the rebuild showed no changes, which confirmed it.
+
+CI caught a second problem: `tflint` evaluates `file()`, and the runner has no `~/.ssh`. The public key is now passed as a value in the untracked `terraform.tfvars`, so the code reads nothing outside the repo.
+
+### Part 7: Proving it before trusting it
+
+Before approving the rebuild, you asked for proof that the code would create exactly what was running. That was the right question. We compared the plan's instance attributes with the live instance (all identical except the key pair and cloud-init), scanned every path in the shell history, compared runtime state with saved files, and compared package versions.
+
+That comparison found one real difference: the old host had a full `apt-get upgrade`. So the cloud-init `user_data` now sets the HTTPS mirror, runs a full upgrade and reboots if a new kernel needs it. The mirror line matters more than it looks: the public NACL allows 443 but not 80 (yesterday's Part 4), so an `http://` mirror at first boot would simply have failed.
+
+Then the rebuild itself. The ENI was the old instance's primary interface, which AWS never detaches, so the old host had to be terminated, not stopped. My first plan to keep it stopped as a fallback was wrong, and the fallback became an AMI. The attachment had `DeleteOnTermination` off, so the ENI and its routes survived; the routes showed `blackhole` until the new instance attached it. You ran the apply yourself, because the permission rules block me from doing it.
+
+The first Ansible run failed at the OpenVPN keys. The `aws` CLI snap had been installed by hand on the old host, and my audit had compared apt packages and files but not snaps. Rationale 39 even said the CLI shipped with the AMI, which was a belief, not a fact. The role now installs it, and a full package and snap comparison afterwards showed every apt package and the kernel identical, with no other gap. The third run reported `changed=0`, the nftables checksum matched the old host, and your VPN, ping and private DNS worked.
+
+### Part 8: A session switch instead of a manual routine
+
+With the instance, Elastic IP and record in Terraform state, releasing the IP by hand would have been drift. Now `terraform apply -var fw_enabled=false` destroys exactly four resources at the end of a session (decision 41). The `vpn` record goes too, so the name never points at a released address that someone else might be given. Adding `count` changes each resource's address, so `moved` blocks tell Terraform these are the same resources, not new ones; without them the plan would have replaced the running fw-ips.
+
+### Mistakes and what they taught
+
+- **I assumed the AMI shipped the `aws` CLI.** It didn't. Write down facts you checked, not things you expect, and when you audit, list every kind of state: apt packages, snaps, files, services, runtime settings.
+- **I said the old instance could stay stopped as a fallback.** The primary ENI made that impossible. I caught it by checking the attachment before acting, which is why we check.
+- **I checked Suricata's socket too early** and nearly drew a conclusion from a test that ran before the system was ready.
+- **My first `apt-get update` count used the wrong pattern** and returned 0. The real output was the evidence, not the number.
+- **The laptop VPN client exited twice** instead of reconnecting. The cause is unknown, and it's recorded as open rather than guessed.
+
+### Decisions from today
+
+Full reasoning is in `rationale.md`, entries 36 to 41.
+
+| Topic | Choice | Why |
+|---|---|---|
+| Ansible transport | SSH inside SSM | Port 22 stays closed, two secrets needed |
+| `suricata.yaml` | Own the whole file, two commits | Exact diff, drift visible |
+| Rule updates | Daily timer with `reload-rules` | No fail-closed pause, catches up after downtime |
+| VPN secrets | Host pulls with its own role | Laptop out of the secret's path |
+| fw-ips in Terraform | Rebuild, import IAM and IP | Proves the code on a clean host |
+| Between sessions | `fw_enabled=false` | Nothing idle billed, reviewed plan each time |
+
+### Interview questions to practise
+
+1. How does Ansible reach a host that has no SSH port open to any network?
+2. What does an attacker need to reach a host in this design, and why is that two things, not one?
+3. Why does `IdentitiesOnly` matter when your agent holds several keys?
+4. Why doesn't changing `ListenAddress` take effect with a plain `systemctl restart ssh` on Ubuntu 24.04?
+5. What does `--check --diff` prove, and what can't it prove?
+6. Why own a whole upstream config file instead of editing three lines in place?
+7. How did a test command break Suricata's reload, and how would you prove it?
+8. Why reload rules instead of restarting an IPS that fails closed?
+9. What is the difference between pushing a secret to a host and having the host pull it?
+10. Why can't an instance's primary ENI be moved to a new instance while the old one exists?
+11. Why must source/dest check stay off on a NAT or routing instance, and how could Terraform turn it on by accident?
+12. What does a `moved` block do, and what happens without one when you add `count`?
+13. Why did the rebuild find a gap that a careful audit missed?
+14. Why remove the DNS record at the same time as the Elastic IP?
+
+### What comes next
+
+Next session starts with the routine in TASKS: `terraform apply`, put the new instance ID in the inventory, wait for cloud-init, run the role, connect the VPN. That is the second build from code. If every check passes, delete the fallback AMI and its snapshot. Then task 1.13: the `db` host and its role, the first private host behind fw-ips.
