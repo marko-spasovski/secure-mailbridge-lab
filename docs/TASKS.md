@@ -31,7 +31,7 @@ it is verified, and the relevant doc section is updated.
 3. [x] **Inventory from Terraform:** the `aws_ec2` dynamic inventory, by the `Project` and `Role` tags (decision 45). Verified 2026-11-02: `ansible-inventory --graph` shows `fw_ips` → `mailbridge-lab-fw-ips`, ping returns `pong`, and `site.yml` reports `changed=0`. Each new host needs `Project` and `Role` tags in Terraform.
 4. [x] **Where `db`'s password lives** (part of 1.2): decision 46. `terraform/persistent` creates `/mailbridge/db-password` from an ephemeral `random_password` into the write-only `value_wo`. Verified 2026-11-02: the parameter is a `SecureString` at version 1; the state has `value_wo` null, and the real value appears in it 0 times; the plan JSON held no value; a second plan shows no changes. The other hand-built `persistent` pieces are imported later in 1.2, one at a time.
 
-End every session with: Claude saves `terraform -chdir=terraform/lab plan -var hosts_enabled=false -out=<scratchpad>/off.tfplan` (expect 4 to destroy for fw-ips, plus 1 per private host: 5 once db exists), Marko disconnects the VPN and runs the apply, Claude confirms no instance, Elastic IP or volume is left.
+End every session with: Claude saves `terraform -chdir=terraform/lab plan -var hosts_enabled=false -out=<scratchpad>/off.tfplan` (expect 4 to destroy for fw-ips, plus 1 per private host: 6 with db and app), Marko disconnects the VPN and runs the apply, Claude confirms no instance, Elastic IP or volume is left.
 
 ## Open items
 
@@ -134,6 +134,7 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Verify (decision 48, db side only): PostgreSQL listens on 10.0.4.10:5432; `pg_hba` allows only the app user from 10.0.3.10/32 with `scram-sha-256`; a local login with the SSM value works; `nc -zv -w 3 10.0.4.10 5432` from the VPN admin pool times out and fw-ips logs the drop; the IAM simulator allows only `/mailbridge/db-password`. "Connect from app" moves to 1.14 and "refused from proxy" to 1.15
 - [ ] **1.14** `app` role: Mailbridge from ECR pinned by digest, listening on 3000, secrets from SSM · C
   - Note: two DB roles (decision 54): db creates `mailbridge_app`; app runs migrate as the owner, applies `db-roles.sql` with `psql`, then runs the app as `mailbridge_app`. Secrets generated in `persistent` (decision 55); OAuth secrets wait for 1.19
+  - Note: secrets reach the containers through start scripts under systemd with `--rm` (decision 56); the image is built and pushed by hand for now, automated in T2.2 (decision 57). The app host and its role are in `modules/compute/app.tf`
   - Verify: `docker inspect` shows the pinned digest; port 3000 reachable from proxy, unreachable from the VPN directly; `psql` to 10.0.4.10 as the app user connects (decision 48)
 - [ ] **1.15** `proxy` role: Nginx, TLS, rate limit, ModSecurity v3 + CRS, `certbot-dns-route53` (staging) · C
   - Verify: `curl -k https://mail.<domain>` over VPN returns 200; `?id=1' OR '1'='1` gets 403 and is in the audit log; `nc -zv -w 3 10.0.4.10 5432` from proxy times out (decision 48)

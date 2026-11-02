@@ -727,3 +727,27 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** Rotating the token key makes stored mailbox tokens unreadable, so users must reconnect their mailboxes. With the database rebuilt each session (decision 49) this costs nothing today. The OAuth secrets still need their own decision in 1.19, because they can't come from Terraform's random provider.
 
 **Verify once built.** The plan shows the three values as `(write-only attribute)`, and the plan JSON contains no `value_wo` string. `aws ssm describe-parameters` lists the three as `SecureString`, and `terraform state pull` contains none of the values.
+
+## 56. How app's secrets reach the container (2026-11-02)
+
+**Problem.** Mailbridge reads its secrets from environment variables. Two facts shape the choice. Docker stores a container's configuration, env included, in `/var/lib/docker/containers/<id>/config.v2.json` for as long as the container exists, even when stopped, and `docker inspect` shows it to root. And root on app can read SSM anyway through the instance role, so hiding values from root gains nothing. What matters is keeping them out of argv, logs, Ansible output, and anything that outlives the service: files, AMIs, backups.
+
+**Options.** A: root-owned start scripts that pull values from SSM at each start and run `docker run --rm -e NAME`, under a systemd unit. B: Ansible writes a 0600 `app.env` and Docker uses `--env-file`. C: change the app to read `*_FILE` variables, with values as files on a tmpfs mounted into the container.
+
+**Chosen: A.** `mailbridge.service` runs the migration and the grants as `ExecStartPre` and the app as `ExecStart`. Each step pulls only the values it needs into its own environment; `-e NAME` without `=value` makes Docker copy the value from that environment, so it never appears in argv. The owner password reaches only the migration and the `psql` grant step, and the app container gets only `mailbridge_app`'s (decision 54). Containers run with `--rm`, and systemd's `Restart=on-failure` replaces Docker's `--restart`, so a stopped container and its stored config disappear at once. Each start re-reads SSM, so a rotation needs only a restart. B leaves a file on disk for the host's whole life. C is the cleaner Docker secrets pattern, but it needs an app change for little gain while root can already reach SSM; it stays a hardening idea.
+
+**Trade-off accepted.** While the app runs, root can see its env with `docker inspect`, and Docker keeps that copy under `/var/lib/docker` until the container stops. An image of the running host would contain it.
+
+**Verify once built.** `ps -ef` on app shows no secret in any command line. `docker inspect` of the app container lists `POSTGRES_USER=mailbridge_app` and no owner password. After `systemctl stop mailbridge`, `docker ps -a` is empty. Ansible's `-v` output contains none of the values.
+
+## 57. How the image is built and pushed (2026-11-02)
+
+**Problem.** app pulls Mailbridge from ECR by digest (§3, decision 53). Some machine must build the image and push it, and whoever can push decides what app runs, so this is a supply-chain decision as much as a convenience one.
+
+**Options.** A: build and push by hand from the laptop with the admin's short-lived `aws login` session, and automate later. B: the app repo's GitHub Actions pushes through an IAM role trusted with OIDC, limited to `main`. C: build on the app instance itself.
+
+**Chosen: A, for now.** From the merged app commit: `docker build --platform linux/amd64 --provenance=false`, tagged with the git commit, then `docker push` after `aws ecr get-login-password`. A single-platform image with no attestation manifest can't lose parts to decision 53's untagged rule, and a commit tag is unique, as immutable tags require. The pushed digest is pinned in the lab's Ansible variables. No new credential is created. B is the intended end state (T2.2), but it adds an OIDC provider, a role and a trust policy now, and ties a repo's CI to the account before Tier 1 works and before the repo's visibility is settled. C puts build tools, source and npm's internet access on a production host and loses registry digest pinning.
+
+**Trade-off accepted.** A manual step, and the laptop's Docker is part of the supply chain. The app's CI has built and scanned the same commit with Trivy, which limits the risk.
+
+**Verify once built.** `aws ecr describe-images --repository-name mailbridge` lists one image with the commit tag and `imageManifestMediaType` `application/vnd.docker.distribution.manifest.v2+json` or the OCI manifest type, not an index. A scan result appears in `describe-image-scan-findings`. Pushing the same tag again fails with `ImageTagAlreadyExistsException`. On app, `docker inspect` shows the pinned digest.

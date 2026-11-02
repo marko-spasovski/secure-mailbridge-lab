@@ -30,6 +30,15 @@ module "compute" {
 
   db_subnet_id         = module.network.subnet_ids["data"]
   db_security_group_id = module.security.security_group_ids["db"]
+
+  app_subnet_id         = module.network.subnet_ids["app"]
+  app_security_group_id = module.security.security_group_ids["app"]
+  ecr_repository_arn    = data.aws_ecr_repository.mailbridge.arn
+}
+
+# Belongs to the persistent stack (decision 53), so lab only looks it up.
+data "aws_ecr_repository" "mailbridge" {
+  name = "mailbridge"
 }
 
 # The zone belongs to the persistent stack (task 1.2), so lab only looks it up.
