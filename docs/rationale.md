@@ -619,3 +619,27 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** Terraform can't detect drift in the value, because it never knows it. A new random value is generated on every run but sent only when `value_wo_version` changes, so rotating means bumping the version and then re-running the `db` and `app` roles. The password is letters and digits only, 40 of them (about 238 bits), so it never needs escaping in a connection string. It uses the AWS-managed `aws/ssm` key like `/vpn/*`; checkov's CMK check is skipped with that reason. `persistent` uses the same state bucket as `lab` under its own key, so a lab teardown can't reach it.
 
 **Verify once built.** The plan shows `1 to add`, with `value_wo` as `(write-only attribute)`, and `terraform show -json` of the saved plan contains no `value_wo` or `value`. After apply, `aws ssm describe-parameters` lists `/mailbridge/db-password` as `SecureString`, and the state (`terraform state pull`) has `value_wo` null and no password. Reading the value back works only for the admin, and later for the `db` and `app` roles.
+
+## 47. How the `db` host gets its password (2026-11-02)
+
+**Problem.** Decision 46 put the DB password in SSM, where nobody has seen it. PostgreSQL needs it to set the password of the app's database user, and later `app` needs it to connect. Something has to carry the value from SSM to the db host, and every component it passes through is another place it can leak: memory, logs, terminal output.
+
+**Options.** A: db reads it with its own instance role, granted that one parameter, and a helper on the host sets the password without printing it. B: Ansible reads it on the laptop with the `aws_ssm` lookup and pushes it over the SSM tunnel, hidden with `no_log`. C: no password at all; the app authenticates with a client certificate.
+
+**Chosen: A.** It is the pull pattern from decision 39, already proven on fw-ips: the instance role gives temporary credentials through IMDSv2, and the value goes from SSM straight into PostgreSQL on the same host. The laptop never holds it. B puts the value inside the laptop's Ansible process, where one missing `no_log` or a `-vvv` run prints it. C is stronger but needs a second PKI (or reuse of the VPN CA) and certificate handling in the app, which is too much for Tier 1. It stays a possible hardening finding.
+
+**Trade-off accepted.** db can read the password for its whole life, not only during setup. That adds little, because db already holds what the password protects, and PostgreSQL keeps only a SCRAM-SHA-256 hash of it. The grant names one ARN with the account and region from data sources (decision 43). The `aws/ssm` key needs no extra KMS grant, because its key policy allows use through SSM by any principal in the account that IAM allows. §7 no longer lists the S3 backup grant for db; T2.3 adds it with the bucket.
+
+**Verify once built.** The IAM policy simulator allows the db role `ssm:GetParameter` on `/mailbridge/db-password` and denies `/mailbridge/` siblings and `/vpn/*`. An Ansible run shows no password in its output, even with `-v`. On db, a login as the app user with the SSM value works, and a wrong password fails.
+
+## 48. Verifying `db` before `app` and `proxy` exist (2026-11-02)
+
+**Problem.** Task 1.13's check was "connect succeeds from app, is refused from proxy", but the build order (§13) puts db first, so neither host exists. Three layers decide whether a connection reaches PostgreSQL: the network (sg-db and the data NACL), PostgreSQL's listener (`listen_addresses`), and `pg_hba.conf` (which address may log in as which user, and how). A good test shows which layer allowed or refused.
+
+**Options.** A: split the check. 1.13 proves db's own layers, 1.14 adds the app connection, 1.15 the proxy refusal. B: throwaway probe VMs with sg-app and sg-proxy, deleted after the test. C: create bare app and proxy instances in Terraform now, without their roles.
+
+**Chosen: A.** Each host is tested against its real dependency, as §13 says, and no resource exists outside code. B would prove the whole path today for a few cents, but it is a hand build, and the last temporary VM launched with the wrong role (2026-11-01). C builds two layers early and leaves their IAM half-done until their own tasks.
+
+**Trade-off accepted.** Until 1.14, the app→db network path is proven only on paper: the sg-db and data NACL rules were checked line by line against §4 in 1.4, but no packet has crossed them. If 1.14 fails, the cause could be in db or the network, and the layered checks below narrow it down.
+
+**Verify once built.** On db: `ss -ltn` shows PostgreSQL on 10.0.4.10:5432 (and loopback), and the `pg_hba` file allows only the app user to its database from 10.0.3.10/32 with `scram-sha-256`. A local login with the SSM value works. From the VPN admin pool, `nc -zv -w 3 10.0.4.10 5432` times out, and fw-ips logs the drop. In 1.14, `psql` from app connects. In 1.15, the same command from proxy times out.
