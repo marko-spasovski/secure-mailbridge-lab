@@ -29,7 +29,7 @@ it is verified, and the relevant doc section is updated.
    - If all pass: delete the fallback AMI and its snapshot, with Marko's OK
 2. [x] **Small fixes, one PR each:** ~~`depends_on = [aws_instance.fw]` on the Elastic IP association~~ (PR 26, proved at the next start); ~~remove `default` from the fw-ips ENI~~ (decision 42, verified); ~~tighten the fw-ips role description and use the account ID instead of `*` in its grant~~ (decision 43, verified); ~~rule 1000004 `flow:to_server`~~ (written by Claude at Marko's explicit request; the Suricata warning about a missing direction is gone, and the flood capture still raises it).
 3. [x] **Inventory from Terraform:** the `aws_ec2` dynamic inventory, by the `Project` and `Role` tags (decision 45). Verified 2026-11-02: `ansible-inventory --graph` shows `fw_ips` → `mailbridge-lab-fw-ips`, ping returns `pong`, and `site.yml` reports `changed=0`. Each new host needs `Project` and `Role` tags in Terraform.
-4. [ ] **Where `db`'s password lives** (part of 1.2): Terraform stores parameter values in state, so decide how `/mailbridge/db-password` is created. Consider importing the hand-built `persistent` pieces at the same time.
+4. [~] **Where `db`'s password lives** (part of 1.2): decided 2026-11-02, decision 46. `terraform/persistent` creates `/mailbridge/db-password` from an ephemeral `random_password` into the write-only `value_wo`, so the value is in no state or plan. Done once applied and checked. The other hand-built `persistent` pieces are imported later in 1.2, one at a time.
 
 End every session with: Claude saves `terraform -chdir=terraform/lab plan -var fw_enabled=false -out=<scratchpad>/off.tfplan` (expect 4 to destroy), Marko disconnects the VPN and runs the apply, Claude confirms no instance, Elastic IP or volume is left.
 
@@ -80,6 +80,7 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Verify: in CloudShell, `aws budgets describe-budget --account-id <id> --budget-name mailbridge-lab-monthly` shows a 20 USD limit and `FilterExpression` excludes `Credit` and `Refund`
 - [ ] **1.2** `terraform/persistent`: state bucket, backup bucket, flow log bucket, Route 53 zone, ECR repository, VPN CA + secrets · C
   - Note: `/vpn/ca/*` was created by hand. Don't import `/vpn/ca/key` without a plan for its value, because Terraform stores parameter values in state.
+  - Note: started 2026-11-02 with `/mailbridge/db-password` only (decision 46). The stack uses the same state bucket under its own key, `persistent/terraform.tfstate`.
   - Verify: Marko reviews `terraform plan` before any apply; no secret values in the repo or in plan output
 
 **Network (free resources)**
