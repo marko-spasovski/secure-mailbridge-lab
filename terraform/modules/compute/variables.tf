@@ -57,3 +57,30 @@ variable "db_security_group_id" {
   description = "sg-db from the security module."
   type        = string
 }
+
+variable "app_instance_type" {
+  description = "app instance type (ARCHITECTURE.md §3)."
+  type        = string
+  default     = "t3.small"
+}
+
+variable "app_subnet_id" {
+  description = "App subnet from the network module."
+  type        = string
+}
+
+variable "app_private_ip" {
+  description = "app's fixed address, which pg_hba on db and the proxy refer to."
+  type        = string
+  default     = "10.0.3.10"
+}
+
+variable "app_security_group_id" {
+  description = "sg-app from the security module."
+  type        = string
+}
+
+variable "ecr_repository_arn" {
+  description = "ARN of the mailbridge ECR repository in the persistent stack, the only one app may pull from."
+  type        = string
+}
