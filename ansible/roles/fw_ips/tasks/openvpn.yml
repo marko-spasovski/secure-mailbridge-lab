@@ -1,0 +1,86 @@
+---
+# OpenVPN server, tasks 1.7b and 1.8 (decisions 23, 36, 39).
+# A restart drops VPN clients for a few seconds. Ansible runs over SSM, so it
+# can't cut off its own connection.
+- name: Install OpenVPN
+  ansible.builtin.apt:
+    name: openvpn
+    state: present
+
+- name: Create the client config directory
+  ansible.builtin.file:
+    path: /etc/openvpn/server/ccd
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the server config
+  ansible.builtin.copy:
+    src: openvpn-server.conf
+    dest: /etc/openvpn/server/server.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart OpenVPN
+
+# Read when a client connects, so no restart is needed.
+- name: Install the admin device config
+  ansible.builtin.copy:
+    src: ccd/marko-laptop
+    dest: /etc/openvpn/server/ccd/marko-laptop
+    owner: root
+    group: root
+    mode: "0644"
+
+# Installed even in check mode: the tasks below need it to compare the files,
+# and in "check" mode it only reads.
+- name: Install the SSM fetch helper
+  ansible.builtin.copy:
+    src: fetch-ssm-param
+    dest: /usr/local/sbin/fetch-ssm-param
+    owner: root
+    group: root
+    mode: "0755"
+  check_mode: false
+
+# fw-ips pulls these with its own role, which can read /vpn/fw-ips/* only
+# (decision 22). The values never reach the laptop or Ansible's output.
+# check_mode false: the helper's "check" argument makes it read-only.
+- name: Pull the server PKI files from SSM
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/fetch-ssm-param
+      - "/vpn/fw-ips/{{ item.param }}"
+      - "/etc/openvpn/server/{{ item.file }}"
+      - "{{ item.mode }}"
+      - "{{ 'check' if ansible_check_mode else '' }}"
+  loop:
+    - { param: ca-cert, file: ca.crt, mode: "0644" }
+    - { param: server-cert, file: fw-ips.crt, mode: "0644" }
+    - { param: server-key, file: fw-ips.key, mode: "0600" }
+    - { param: tls-crypt-key, file: tls-crypt.key, mode: "0600" }
+  register: fw_ips_vpn_pki
+  changed_when: fw_ips_vpn_pki.stdout == "changed"
+  check_mode: false
+  no_log: true
+  notify: Restart OpenVPN
+
+# The CRL is re-read on each new connection: a revocation needs no restart.
+- name: Pull the CRL from SSM
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/fetch-ssm-param
+      - /vpn/fw-ips/crl
+      - /etc/openvpn/server/crl.pem
+      - "0644"
+      - "{{ 'check' if ansible_check_mode else '' }}"
+  register: fw_ips_vpn_crl
+  changed_when: fw_ips_vpn_crl.stdout == "changed"
+  check_mode: false
+
+- name: Enable and start OpenVPN
+  ansible.builtin.systemd_service:
+    name: openvpn-server@server
+    enabled: true
+    state: started
