@@ -703,3 +703,27 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** Every build needs a new tag, such as a version or the git commit, so `latest` can't be re-pushed. The untagged rule could remove the child manifests of a multi-platform image index or a build attestation. The build decision in 1.14 has to check this: build a single `linux/amd64` image, or confirm ECR keeps manifests that an index references.
 
 **Verify once built.** `aws ecr describe-repositories --repository-names mailbridge` shows `IMMUTABLE`, `scanOnPush: true` and `KMS`. `aws ecr get-lifecycle-policy` returns both rules. Pushing the same tag twice fails with `ImageTagAlreadyExistsException`, and a push shows a scan result in `aws ecr describe-image-scan-findings`.
+
+## 54. One database role or two (2026-11-02)
+
+**Problem.** In PostgreSQL a table's owner can always alter or drop it, including its triggers. Mailbridge's migration 010 makes `audit_events` insert-only with a trigger. If the app connects as the owner, anyone with its credentials (SQL injection, a leaked environment, a shell in the container) can drop the trigger and rewrite the audit log. The concept is separation of duties: an owner used only by the short migration step, and a runtime role with row access only, used by the long-running app. The app's ADR 0008 describes the split and its grants (`deploy/db-roles.sql`).
+
+**Options.** A: two roles; db creates `mailbridge_app` and sets its password, and app applies the grants after migrating. B: two roles, with db applying the grants, so `site.yml` runs db, then app, then db again. C: one role, the app running as the owner.
+
+**Chosen: A.** db's role already runs as `postgres`, so it can create the runtime role, the only step that needs `CREATEROLE`. The `set-db-password` helper is generalized to both roles, and db's IAM grant names the two parameters. On app, each start runs the migrate container as the owner, then `psql` (from `postgresql-client`) applies `db-roles.sql` as the owner once the tables exist, then the app container as `mailbridge_app`. The running app never holds the owner password. The app's own test on PostgreSQL 16 shows the runtime role gets "must be owner" for `DROP TRIGGER` and "permission denied" for `UPDATE audit_events`, DDL and `pgmigrations`. B keeps no secret off app, because migration needs the owner password, and it makes the playbook bounce between hosts. C protects the audit log only from the app's own code.
+
+**Trade-off accepted.** The app host holds both passwords, and its start has one more step. `db-roles.sql` must match the app's migrations, so the Ansible copy is pinned to the image's commit and updated with it.
+
+**Verify once built.** On db, `\du` lists `mailbridge_app` without `Superuser`, `Create role` or `Create DB`. As `mailbridge_app`: `DROP TRIGGER audit_events_guard_row ON audit_events` fails with "must be owner", `UPDATE audit_events SET ...` and `CREATE TABLE x()` fail with "permission denied", and the app's `/healthz` returns 200. The app container's environment (`docker inspect`) holds no owner password.
+
+## 55. The app's generated secrets (2026-11-02)
+
+**Problem.** Mailbridge needs a session secret, a token encryption key and, after decision 54, a runtime database password. The app accepts raw text of at least 32 characters for the first two and requires them to differ. The OAuth client secrets come from the Google and Microsoft consoles and can't be generated.
+
+**Options.** A: generate the three in `persistent` with the decision 46 pattern, and defer the OAuth secrets to 1.19. B: create all of them by hand with `aws ssm put-parameter`. C: wait and create everything together once the OAuth apps exist.
+
+**Chosen: A.** An ephemeral `random_password` written to `value_wo` keeps each value out of state, plans and the laptop, as for the owner's password. The runtime password uses the owner's format (40 letters and digits), which `set-db-password` checks. The session secret and token key are 64 letters and digits each, about 380 bits, generated independently. The app treats both OAuth providers as optional, so app can be built and tested in 1.14 without them. B puts values through a terminal for no reason. C blocks 1.14 on the provider consoles.
+
+**Trade-off accepted.** Rotating the token key makes stored mailbox tokens unreadable, so users must reconnect their mailboxes. With the database rebuilt each session (decision 49) this costs nothing today. The OAuth secrets still need their own decision in 1.19, because they can't come from Terraform's random provider.
+
+**Verify once built.** The plan shows the three values as `(write-only attribute)`, and the plan JSON contains no `value_wo` string. `aws ssm describe-parameters` lists the three as `SecureString`, and `terraform state pull` contains none of the values.
