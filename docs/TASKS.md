@@ -18,7 +18,9 @@ it is verified, and the relevant doc section is updated.
 ## Open items
 
 - [~] **Delegate the subdomain:** zone and NS records built by hand and verified with `dig`, parent MX unchanged. Import the zone in 1.2.
-- [ ] **Each session during the fw-ips hand build:** start by allocating an Elastic IP, associating it with the ENI, starting fw-ips and updating the `vpn` record; end by stopping fw-ips and releasing the Elastic IP (decision 24).
+- [x] **Session routine (decision 41, replaces decision 24):**
+  - Start: `terraform -chdir=terraform/lab apply`, then put `terraform -chdir=terraform/lab output -raw fw_instance_id` into `ansible/inventories/aws/hosts.yml`, wait for `cloud-init status` = `done`, run `ansible-playbook site.yml` from `ansible/`, and connect the VPN.
+  - End: `terraform -chdir=terraform/lab apply -var fw_enabled=false`, then check that no instance or Elastic IP is left.
 - [x] **Ansible over SSM:** decided: SSH tunnelled through SSM with a laptop-only key (decision 36). fw-ips gets the public key once through SSM, because it was launched without a key pair.
 - [x] **Suricata upkeep:** daily `suricata-update.timer` with `reload-rules`; the refusal was a test run replacing the command socket (decision 38).
 - [ ] **Default security group on the fw-ips ENI:** the ENI carries `mailbridge-lab-fw` and `default`. `default` has no rules, so it grants nothing, but §4 says sg-fw only. Remove it in a small separate change.

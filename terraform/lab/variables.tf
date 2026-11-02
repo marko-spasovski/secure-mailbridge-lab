@@ -17,3 +17,9 @@ variable "ssh_public_key" {
   description = "Contents of ~/.ssh/mailbridge-lab-ansible.pub, the public half of the laptop-only Ansible key (decision 36). Passed as a value, not a path, so CI and other machines can evaluate the config."
   type        = string
 }
+
+variable "fw_enabled" {
+  description = "Session switch (decision 41): terraform apply -var fw_enabled=false at the end of a session, plain terraform apply at the start."
+  type        = bool
+  default     = true
+}

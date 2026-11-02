@@ -545,3 +545,15 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** The ENI is the old instance's primary interface, and AWS never detaches a primary interface, so the old instance must be terminated, not stopped, before the new one launches. Its AMI is the fallback, at about a dollar a month until it's deleted. Its attachment has `DeleteOnTermination` off, so the ENI and its routes survive. The VPN is down between the termination and the new host's Ansible run.
 
 **Verify once built.** The plan shows 7 imports, 3 additions and nothing changed; a second plan after apply shows no changes; the ENI's source/dest check stays off; `ansible-playbook site.yml` then reports `changed=0` on its second run; the VPN, DNS, Suricata and nftables checks from 2026-11-02 pass again.
+
+## 41. Session switch for fw-ips (2026-11-02)
+
+**Problem.** Decision 24 stopped fw-ips and released the Elastic IP by hand between sessions, because only one disk held the hand build. Now the instance, Elastic IP and `vpn` record are in Terraform state, so releasing the address by hand would be drift, and the code can rebuild the host.
+
+**Options.** A: a `fw_enabled` variable with `count` on the instance, Elastic IP, association and record. B: `terraform destroy -target` on those resources. C: stop the instance and keep the Elastic IP.
+
+**Chosen: A.** Ending a session is a normal plan and apply that shows exactly four resources destroyed, and starting is a plain apply. The record goes with the address, so the name never points at an IP someone else may now hold. Every session rebuilds fw-ips from code, which keeps proving that Terraform and the role are complete. B relies on `-target`, which Terraform reserves for exceptional use and which is easy to mistype. C keeps paying for an idle IP and disk. IAM and the key pair stay, because they're free and recreating the role would need an import each time. `moved` blocks keep the running resources when `count` is added.
+
+**Trade-off accepted.** Each session starts about 10 minutes later and gets a new Elastic IP, and the instance ID changes, so the untracked inventory needs the new ID. Suricata and VPN logs on the host are lost at each teardown until Wazuh collects them (1.17).
+
+**Verify once built.** With the default, the plan shows only moves; with `fw_enabled=false` it shows 4 to destroy and nothing else; afterwards no instance or Elastic IP exists in the region; the next `terraform apply` and Ansible run restore a working VPN.

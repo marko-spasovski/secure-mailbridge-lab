@@ -29,3 +29,9 @@ variable "ssh_public_key" {
   description = "Public half of the laptop-only Ansible key (decision 36)."
   type        = string
 }
+
+variable "fw_enabled" {
+  description = "false removes the fw-ips instance and Elastic IP between sessions, so nothing idle is billed (decision 41). IAM and the key pair stay; they're free."
+  type        = bool
+  default     = true
+}
