@@ -24,3 +24,4 @@
       ansible.builtin.setup:
   roles:
     - common
+    - db

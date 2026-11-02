@@ -1,0 +1,79 @@
+---
+# PostgreSQL for Mailbridge, task 1.13 (decisions 47 to 52). Runs after the
+# common role, which provides apt over HTTPS and the AWS CLI.
+
+# psycopg2 is what the community.postgresql modules use on the host.
+- name: Install PostgreSQL
+  ansible.builtin.apt:
+    name:
+      - postgresql
+      - python3-psycopg2
+    state: present
+
+# listen_addresses is read only at start, so this one needs a restart.
+- name: Install the PostgreSQL settings
+  ansible.builtin.copy:
+    src: mailbridge.conf
+    dest: "/etc/postgresql/{{ db_pg_version }}/main/conf.d/mailbridge.conf"
+    owner: postgres
+    group: postgres
+    mode: "0644"
+  notify: Restart PostgreSQL
+
+# The whole file, so it can be reviewed line by line and drift shows up.
+- name: Install the client authentication rules
+  ansible.builtin.copy:
+    src: pg_hba.conf
+    dest: "/etc/postgresql/{{ db_pg_version }}/main/pg_hba.conf"
+    owner: postgres
+    group: postgres
+    mode: "0640"
+  notify: Reload PostgreSQL
+
+- name: Enable and start PostgreSQL
+  ansible.builtin.systemd_service:
+    name: "postgresql@{{ db_pg_version }}-main"
+    enabled: true
+    state: started
+
+# Apply the settings and rules now, before the role and helper use them.
+- name: Apply PostgreSQL changes
+  ansible.builtin.meta: flush_handlers
+
+# No password here: it never becomes an Ansible variable (decision 52).
+# The role can log in and own its database, and nothing more.
+- name: Create the mailbridge role
+  community.postgresql.postgresql_user:
+    name: mailbridge
+    role_attr_flags: LOGIN,NOSUPERUSER,NOCREATEDB,NOCREATEROLE,NOREPLICATION
+  become: true
+  become_user: postgres
+
+- name: Create the mailbridge database
+  community.postgresql.postgresql_db:
+    name: mailbridge
+    owner: mailbridge
+  become: true
+  become_user: postgres
+
+# Installed even in check mode, so the task below can compare.
+- name: Install the password helper
+  ansible.builtin.copy:
+    src: set-db-password
+    dest: /usr/local/sbin/set-db-password
+    owner: root
+    group: root
+    mode: "0755"
+  check_mode: false
+
+# db pulls the password with its own role and sets it on the host; Ansible
+# sees only "changed" or "unchanged" (decisions 47, 52). check_mode false:
+# the helper's "check" argument makes it read-only.
+- name: Set the mailbridge password from SSM
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/set-db-password
+      - "{{ 'check' if ansible_check_mode else '' }}"
+  register: db_password_set
+  changed_when: db_password_set.stdout == "changed"
+  check_mode: false
