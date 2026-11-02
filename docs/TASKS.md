@@ -13,11 +13,12 @@ it is verified, and the relevant doc section is updated.
 ## Current position
 
 - **Phase:** 1, Tier 1 on AWS (0.6 and 0.7 still open)
-- **Next task:** 1.13, the `db` role. fw-ips is in Terraform and Ansible and was rebuilt from code (2026-11-02). Delete the fallback AMI `mailbridge-lab-fw-ips-handbuilt-2026-11-02` and its snapshot when Marko approves.
+- **Next task:** 1.13, the `db` role. fw-ips is in Terraform and Ansible and was rebuilt from code (2026-11-02).
 
 ## Open items
 
 - [~] **Delegate the subdomain:** zone and NS records built by hand and verified with `dig`, parent MX unchanged. Import the zone in 1.2.
+- [ ] **Fallback AMI:** keep `mailbridge-lab-fw-ips-handbuilt-2026-11-02` and its snapshot until the next session's rebuild from code also passes every check, then delete both. It's the only copy of the hand-built host, for inspecting anything the role may still miss.
 - [x] **Session routine (decision 41, replaces decision 24):**
   - Start: `terraform -chdir=terraform/lab apply`, then put `terraform -chdir=terraform/lab output -raw fw_instance_id` into `ansible/inventories/aws/hosts.yml`, wait for `cloud-init status` = `done`, run `ansible-playbook site.yml` from `ansible/`, and connect the VPN.
   - End: `terraform -chdir=terraform/lab apply -var fw_enabled=false`, then check that no instance or Elastic IP is left.
