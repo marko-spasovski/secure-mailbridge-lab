@@ -94,6 +94,11 @@ resource "aws_eip_association" "fw" {
   allocation_id        = aws_eip.fw[0].id
   network_interface_id = var.fw_eni_id
   private_ip_address   = var.fw_private_ip
+
+  # Nothing above references the instance, so without this Terraform creates
+  # both at once, and AWS refuses to associate while the instance attached to
+  # the ENI is still pending (IncorrectInstanceState, seen 2026-11-02).
+  depends_on = [aws_instance.fw]
 }
 
 # count was added for fw_enabled (decision 41); these keep the existing
