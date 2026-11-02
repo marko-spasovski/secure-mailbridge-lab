@@ -60,8 +60,12 @@ resource "aws_instance" "fw" {
           uri: https://eu-central-1.ec2.archive.ubuntu.com/ubuntu/
   EOT
 
+  # Project and Role build the Ansible inventory (decision 45): Role is the
+  # Ansible group, so whatever carries Role = fw_ips gets the fw_ips role.
   tags = {
-    Name = "${var.name}-fw-ips"
+    Name    = "${var.name}-fw-ips"
+    Project = var.name
+    Role    = "fw_ips"
   }
 
   # On the primary interface this is the ENI's own check, which the network
