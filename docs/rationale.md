@@ -655,3 +655,15 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** Nothing in the database survives a session: app users, linked mailboxes and stored tokens are recreated each time. A Phase 2 scenario that needs data across several days would have to wait for T2.3 or bring B forward. This is revisited at 1.14 if re-linking proves a burden.
 
 **Verify once built.** After an end-of-session teardown, no db instance or volume is left (`aws ec2 describe-volumes` filtered by `Project=mailbridge-lab` is empty). At the next start, the `db` role creates the user and database again, and the login from decision 48 works with the same SSM password.
+
+## 50. Boot order for private hosts (2026-11-02)
+
+**Problem.** A session starts with one `terraform apply`, which now creates fw-ips and db together. fw-ips forwards nothing until Ansible installs its nftables NAT rules, after the apply. For its first minutes db has no route out: a `package_upgrade` in its cloud-init would fail and leave `cloud-init status` at `error`, and its SSM agent can't register, so Ansible can't reach it yet. The concept is the split of duties: Terraform makes resources exist, and Ansible makes hosts behave. Order between hosts' configuration is a configuration concern.
+
+**Options.** A: one apply; db's first boot needs no network, `site.yml` runs the `fw_ips` play first, and the `db` play waits for the connection before its role upgrades the host. B: two applies, fw-ips first, then the private hosts behind a second switch. C: keep `package_upgrade` in db's cloud-init and add a `bootcmd` loop that waits for the network.
+
+**Chosen: A.** Ansible already runs plays in order, so the dependency is written where it belongs, and the SSM agent's own retries cover the gap until NAT works. The session routine keeps one plan and one approval. B doubles the plans and approvals each session and adds a variable the Makefile (0.6) would have to sequence. C hides a fw-ips failure as a vague cloud-init timeout on another host.
+
+**Trade-off accepted.** db is upgraded by its role instead of at first boot, unlike fw-ips; each method fits its host, because fw-ips has internet at boot and db doesn't. The first `site.yml` run on a fresh session takes longer while it waits for db to register. `wait_for_connection` has a timeout, so a broken fw-ips fails the db play with a clear message instead of hanging.
+
+**Verify once built.** After the apply, `cloud-init status` on db reports `done`, not `error`. The first `site.yml` shows the `fw_ips` play, then the `db` play waiting and connecting. `apt list --upgradable` on db is empty after the run, and the second run reports `changed=0`.
