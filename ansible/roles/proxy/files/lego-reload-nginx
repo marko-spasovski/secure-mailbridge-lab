@@ -1,0 +1,11 @@
+#!/bin/sh
+# Managed by Ansible (proxy role). Run as root by lego-renew.service after
+# lego exits. Reloads Nginx only if lego's deploy hook marked a new
+# certificate. If the config doesn't parse, the marker stays and the
+# service fails, so the next run tries again and the failure is visible.
+set -eu
+marker=/var/lib/lego/renewed
+[ -e "$marker" ] || exit 0
+/usr/sbin/nginx -t -q
+/usr/bin/systemctl reload nginx
+rm -f "$marker"
