@@ -46,6 +46,7 @@ End every session with: Claude saves `terraform -chdir=terraform/lab plan -var h
 - [ ] **VPN client exits on the laptop:** the `openvpn` client process ended twice on 2026-11-02 (about 11:40, and after a server restart) instead of reconnecting. Read the client's last log lines next time it happens.
 - [ ] **Own package mirror or proxy:** Marko wants to discuss this later. Parked until Tier 1 is finished; no design change yet.
 - [ ] **SSH over the VPN:** proposed as a daily-use path from the admin pool, with SSM kept for emergencies. Discuss after 1.9b; no design change yet.
+- [ ] **Keep the proxy certificate between sessions:** proxy is rebuilt every session, so it would request a new certificate each time. Fine on staging; production allows 5 duplicate certificates per week, so decide before 2.6 (for example, keep the lego account and certificate in SSM). Parked 2026-11-04.
 - [x] **Mailbridge repo location:** a separate repo, prepared for deployment on 2026-11-02 (its `docs/deployment.md`); the image is built from a clean export of a merged commit and pushed by hand (decision 57). OAuth secrets and redirect URI registration remain for 1.19.
 
 ---
@@ -141,6 +142,7 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Verify: `docker inspect` shows the pinned digest; port 3000 reachable from proxy, unreachable from the VPN directly; `psql` to 10.0.4.10 as the app user connects (decision 48)
 - [ ] **1.15** `proxy` role: Nginx, TLS, rate limit, ModSecurity v3 + CRS, lego with Route 53 DNS-01 (staging, decision 59) · C
   - Note: lego is pinned in `defaults` by version and SHA-256; at each version bump the release's build provenance is checked on the laptop with `gh attestation verify` before the hash is committed. The role writes `lego-renew.service` and `lego-renew.timer` (decision 59). IAM grant: decision 60; Ansible looks up the zone ID from the laptop at run time and writes it into lego's environment file
+  - Note: TLS 1.3 only, `server_tokens off`, HSTS with a short `max-age` on staging, no OCSP stapling (decision 61)
   - Note: ModSecurity engine and Nginx connector from Ubuntu packages, CRS 4 from one pinned upstream release checked by SHA-256 (decision 58)
   - Verify: `curl -k https://mail.<domain>` over VPN returns 200; `?id=1' OR '1'='1` gets 403 and is in the audit log; `nc -zv -w 3 10.0.4.10 5432` from proxy times out (decision 48)
 
