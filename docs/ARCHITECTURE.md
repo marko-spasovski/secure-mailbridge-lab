@@ -70,7 +70,7 @@ Deploy: Terraform (infra) + Ansible (config) · Teardown: `terraform destroy` wh
 | Name | Type | Disk (gp3, encrypted) | Role | Tier |
 |---|---|---|---|---|
 | fw-ips | t3.small | 20 GB | OpenVPN, nftables, NAT, Suricata, Unbound | 1 |
-| proxy | t3.micro | 10 GB | Nginx + ModSecurity v3 (engine and connector from Ubuntu, OWASP CRS 4 pinned by SHA-256, decision 58), Certbot | 1 |
+| proxy | t3.micro | 10 GB | Nginx + ModSecurity v3 (engine and connector from Ubuntu, OWASP CRS 4 pinned by SHA-256, decision 58), lego (ACME client, decision 59) | 1 |
 | app | t3.small | 20 GB | Mailbridge in Docker | 1 |
 | db | t3.micro | 20 GB | PostgreSQL | 1 |
 | siem | t3.medium (t3.large if the indexer struggles) | 50 GB | Wazuh | 1 |
@@ -81,7 +81,7 @@ All instances: IMDSv2 required · SSM agent (admin access; Ansible uses SSH tunn
 - fw-ips: runs Ubuntu 24.04 LTS (official Canonical AMI, x86_64).
 - fw-ips: its Elastic IP belongs to the `lab` stack and exists only during a session. Clients connect to `vpn.<domain>` (TTL 60), which `lab` updates on each apply.
 - app: pulls the Mailbridge image from ECR with its instance role, pinned by digest (`image@sha256:...`). The `mailbridge` repository is in `persistent`, with immutable tags, scanning on push and a lifecycle policy (decision 53).
-- proxy: Certbot authenticates to Route 53 with its instance role; no stored DNS credentials.
+- proxy: lego (the ACME client) authenticates to Route 53 with its instance role; no stored DNS credentials (decision 59).
 
 ---
 
@@ -152,10 +152,10 @@ Baseline outbound: 110 TCP 443 to 0.0.0.0/0 · 120 UDP 123 to 0.0.0.0/0 · 130 U
 ## 6. DNS & TLS
 
 - Unbound on fw-ips (10.0.1.10): private record `mail.<domain> → 10.0.2.10`, forwards everything else to AmazonProvidedDNS (10.0.0.2). The name resolves only inside the VPN. Unbound serves VPN clients; private hosts keep AmazonProvidedDNS, which security groups and NACLs don't filter (known gap, tested in scenario 2.2). VPN DNS ends at fw-ips, so Suricata doesn't see it. Unbound doesn't validate DNSSEC, because AmazonProvidedDNS returns no signatures.
-- Certbot (`certbot-dns-route53`) obtains a Let's Encrypt cert via **DNS-01 challenge** using the proxy instance role — no public exposure and no stored API token. Nginx serves it; renewal via systemd timer.
+- lego (one pinned static binary, verified by SHA-256, decision 59) obtains a Let's Encrypt cert via **DNS-01 challenge** using the proxy instance role — no public exposure and no stored API token. Nginx serves it; the role installs a systemd timer that runs `lego renew` and reloads Nginx after a renewal.
 - **Staging certificates while building and rebuilding; switch to production certs once the setup is stable** (avoids Let's Encrypt rate limits).
 - DNS provider: **Route 53** public hosted zone in the `persistent` stack. `<domain>` is a subdomain of a domain Marko already owns, delegated by adding NS records for that subdomain at the parent's DNS provider. The parent domain stays where it is, and the real name stays out of this public repo.
-- Public records: `_acme-challenge.mail.<domain>` (TXT, Certbot) and `vpn.<domain>` (A, TTL 60, written by `lab`). `mail.<domain>` is never public.
+- Public records: `_acme-challenge.mail.<domain>` (TXT, lego) and `vpn.<domain>` (A, TTL 60, written by `lab`). `mail.<domain>` is never public.
 - OAuth redirects `https://mail.<domain>/accounts/callback/gmail` and `https://mail.<domain>/accounts/callback/outlook` (the app's own routes) work because the redirect happens in the browser, which is inside the tunnel.
 - Google/Microsoft OAuth apps stay in **testing mode, test accounts only**.
 
