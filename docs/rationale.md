@@ -751,3 +751,15 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** A manual step, and the laptop's Docker is part of the supply chain. The app's CI has built and scanned the same commit with Trivy, which limits the risk.
 
 **Verify once built.** `aws ecr describe-images --repository-name mailbridge` lists one image with the commit tag and `imageManifestMediaType` `application/vnd.docker.distribution.manifest.v2+json` or the OCI manifest type, not an index. A scan result appears in `describe-image-scan-findings`. Pushing the same tag again fails with `ImageTagAlreadyExistsException`. On app, `docker inspect` shows the pinned digest.
+
+## 58. Where ModSecurity and the CRS come from (2026-11-04)
+
+**Problem.** The proxy's WAF has three parts: the engine (libmodsecurity v3), the Nginx connector (a dynamic module that hands each request to the engine), and the OWASP Core Rule Set (text rule files). They can come from different sources. On Ubuntu 24.04 the packages are `libmodsecurity3t64` 3.0.12, `libnginx-mod-http-modsecurity` 1.0.3 and `modsecurity-crs` 3.3.5, all in universe; upstream's current CRS line is 4.x.
+
+**Options.** A: engine and connector from Ubuntu, CRS 4 from a pinned upstream release checked against a SHA-256. B: all three from Ubuntu, CRS 3.3.5. C: the official `owasp/modsecurity-crs:nginx` container, or engine and connector built from source.
+
+**Chosen: A.** apt installs the engine and the connector, so the module always matches the Nginx binary it loads into and gets apt's updates. The role downloads one CRS 4.x release, compares its SHA-256 with the value in `defaults/main.yml` before unpacking, and installs it into a versioned directory that Nginx's ModSecurity config includes. The exact release is chosen in the role PR. B is simpler, but 3.3 is the line the project has moved past: 4.x adds the plugin mechanism used for application exclusions and is what current documentation and Phase 2's bypass testing target. C puts a second Docker host in the DMZ, and Certbot, the certificate files and the logs Wazuh reads would all cross a container boundary; a source build needs a compiler on the DMZ host and loses apt updates.
+
+**Trade-off accepted.** The CRS doesn't update by itself; a new release is a PR changing the version and hash, like the Mailbridge digest. The engine and connector are in universe, which gets Canonical's security fixes only with Ubuntu Pro; without Pro, `unattended-upgrades` may fix them late or not at all. Enabling Pro is a separate decision, not taken now.
+
+**Verify once built.** `nginx -t` passes and the ModSecurity module is loaded (`/etc/nginx/modules-enabled` lists it). The role fails if the downloaded archive's SHA-256 differs from the pinned value. A request with `?id=1' OR '1'='1` returns 403 and the audit log names a CRS 4 rule (942xxx, SQL injection) and the CRS version.

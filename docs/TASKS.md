@@ -140,6 +140,7 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Verified 2026-11-03: third `site.yml` run `changed=0` on all hosts; `/healthz` and `/health` (DB, as `mailbridge_app`) return 200; the container runs the pinned digest with `POSTGRES_USER=mailbridge_app` and the owner password 0 times in its env; no secret in any command line; IMDS from inside the container times out (hop limit 1); as `mailbridge_app`, `DROP TRIGGER audit_events_guard_row` gets "must be owner", `UPDATE audit_events`, `CREATE TABLE`, `TRUNCATE` and `pgmigrations` get "permission denied", `ALTER TABLE` gets "must be owner"; `systemctl stop` leaves `Result=success` and 0 containers; from the admin pool with a hand-added route, port 3000 times out and fw-ips logs `FW-DROP`. Fixed on the way: `ExecStop` failed on a container `--rm` had already removed (PR 46)
   - Verify: `docker inspect` shows the pinned digest; port 3000 reachable from proxy, unreachable from the VPN directly; `psql` to 10.0.4.10 as the app user connects (decision 48)
 - [ ] **1.15** `proxy` role: Nginx, TLS, rate limit, ModSecurity v3 + CRS, `certbot-dns-route53` (staging) · C
+  - Note: ModSecurity engine and Nginx connector from Ubuntu packages, CRS 4 from one pinned upstream release checked by SHA-256 (decision 58)
   - Verify: `curl -k https://mail.<domain>` over VPN returns 200; `?id=1' OR '1'='1` gets 403 and is in the audit log; `nc -zv -w 3 10.0.4.10 5432` from proxy times out (decision 48)
 
 **siem**

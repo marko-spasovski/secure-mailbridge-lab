@@ -70,7 +70,7 @@ Deploy: Terraform (infra) + Ansible (config) · Teardown: `terraform destroy` wh
 | Name | Type | Disk (gp3, encrypted) | Role | Tier |
 |---|---|---|---|---|
 | fw-ips | t3.small | 20 GB | OpenVPN, nftables, NAT, Suricata, Unbound | 1 |
-| proxy | t3.micro | 10 GB | Nginx + ModSecurity v3 (OWASP CRS), Certbot | 1 |
+| proxy | t3.micro | 10 GB | Nginx + ModSecurity v3 (engine and connector from Ubuntu, OWASP CRS 4 pinned by SHA-256, decision 58), Certbot | 1 |
 | app | t3.small | 20 GB | Mailbridge in Docker | 1 |
 | db | t3.micro | 20 GB | PostgreSQL | 1 |
 | siem | t3.medium (t3.large if the indexer struggles) | 50 GB | Wazuh | 1 |
