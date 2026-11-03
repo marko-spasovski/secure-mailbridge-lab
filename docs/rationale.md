@@ -751,3 +751,51 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** A manual step, and the laptop's Docker is part of the supply chain. The app's CI has built and scanned the same commit with Trivy, which limits the risk.
 
 **Verify once built.** `aws ecr describe-images --repository-name mailbridge` lists one image with the commit tag and `imageManifestMediaType` `application/vnd.docker.distribution.manifest.v2+json` or the OCI manifest type, not an index. A scan result appears in `describe-image-scan-findings`. Pushing the same tag again fails with `ImageTagAlreadyExistsException`. On app, `docker inspect` shows the pinned digest.
+
+## 58. Where ModSecurity and the CRS come from (2026-11-04)
+
+**Problem.** The proxy's WAF has three parts: the engine (libmodsecurity v3), the Nginx connector (a dynamic module that hands each request to the engine), and the OWASP Core Rule Set (text rule files). They can come from different sources. On Ubuntu 24.04 the packages are `libmodsecurity3t64` 3.0.12, `libnginx-mod-http-modsecurity` 1.0.3 and `modsecurity-crs` 3.3.5, all in universe; upstream's current CRS line is 4.x.
+
+**Options.** A: engine and connector from Ubuntu, CRS 4 from a pinned upstream release checked against a SHA-256. B: all three from Ubuntu, CRS 3.3.5. C: the official `owasp/modsecurity-crs:nginx` container, or engine and connector built from source.
+
+**Chosen: A.** apt installs the engine and the connector, so the module always matches the Nginx binary it loads into and gets apt's updates. The role downloads one CRS 4.x release, compares its SHA-256 with the value in `defaults/main.yml` before unpacking, and installs it into a versioned directory that Nginx's ModSecurity config includes. The exact release is chosen in the role PR. B is simpler, but 3.3 is the line the project has moved past: 4.x adds the plugin mechanism used for application exclusions and is what current documentation and Phase 2's bypass testing target. C puts a second Docker host in the DMZ, and Certbot, the certificate files and the logs Wazuh reads would all cross a container boundary; a source build needs a compiler on the DMZ host and loses apt updates.
+
+**Trade-off accepted.** The CRS doesn't update by itself; a new release is a PR changing the version and hash, like the Mailbridge digest. The engine and connector are in universe, which gets Canonical's security fixes only with Ubuntu Pro; without Pro, `unattended-upgrades` may fix them late or not at all. Enabling Pro is a separate decision, not taken now.
+
+**Verify once built.** `nginx -t` passes and the ModSecurity module is loaded (`/etc/nginx/modules-enabled` lists it). The role fails if the downloaded archive's SHA-256 differs from the pinned value. A request with `?id=1' OR '1'='1` returns 403 and the audit log names a CRS 4 rule (942xxx, SQL injection) and the CRS version.
+
+## 59. The ACME client: lego instead of Certbot (2026-11-04)
+
+**Problem.** proxy needs a Let's Encrypt certificate for a name that is never public, so it uses the DNS-01 challenge: the client writes a TXT record at `_acme-challenge.mail.<domain>` in the public Route 53 zone, using the instance role (§6, §7). Something must request the certificate, renew it before its 90 days run out, and reload Nginx afterwards, without any stored credential.
+
+**Options.** A: Certbot and `python3-certbot-dns-route53` from Ubuntu (2.9.0, universe), with the packaged `certbot.timer`. B: the Certbot snap with the Route 53 plugin snap, as EFF recommends. C: a standalone client, acme.sh or lego.
+
+**Chosen: C, lego.** lego is a single static Go binary with a built-in Route 53 provider that uses the AWS SDK's default credential chain, so it picks up the instance role through IMDSv2. The role downloads one release, compares its SHA-256 with the value in `defaults/main.yml`, and installs it. Before a new version's hash is committed, its GitHub build provenance is checked on the laptop with `gh attestation verify`, so the pinned hash is known to come from lego's own release workflow. Given the zone ID, lego doesn't list hosted zones, which narrows the grant (decision 3 of 1.15). The role also writes `lego-renew.service` and `lego-renew.timer`: the timer runs daily with a random delay, the service runs `lego renew` (which renews only within 30 days of expiry) and reloads Nginx only when a certificate was renewed. A's main advantage, updates through apt, is weak because universe packages get Canonical's security fixes only with Ubuntu Pro; it also puts Python, Certbot and boto3 on the DMZ host. B's plugin requires `trust-plugin-with-root=ok`, and snaps update themselves from the Snap Store without review. acme.sh was rejected: a large shell script that self-installs and self-upgrades by default, and CVE-2023-38198 let a malicious CA's response run code on the client.
+
+**Trade-off accepted.** We maintain the systemd units ourselves and update lego by PR. lego is less common than Certbot, and its file layout (`/var/lib/lego/certificates/`) differs from the familiar `/etc/letsencrypt/live/`.
+
+**Verify once built.** The role fails on a wrong SHA-256. `lego list` shows `mail.<domain>`; `openssl x509 -noout -issuer -enddate` on the certificate shows a staging issuer (`(STAGING)` in the name) and a date about 90 days ahead. `systemctl list-timers lego-renew.timer` shows the next run; `systemctl start lego-renew.service` exits 0 and logs that no renewal was needed. CloudTrail shows `ChangeResourceRecordSets` by the proxy role and no `ListHostedZones`.
+
+## 60. proxy's IAM grant for DNS-01 (2026-11-04)
+
+**Problem.** lego on proxy (decision 59) writes and deletes one TXT record in the public zone. proxy is the host facing users, so it is the likeliest to be compromised, and whatever its role can do, an attacker there can do. A zone-wide `ChangeResourceRecordSets` would let them repoint `vpn.<domain>` at their own server and intercept VPN connections, stopped only by `tls-crypt` and the server-certificate check.
+
+**Options.** A: the narrowest grant IAM can express: `ChangeResourceRecordSets` on this zone with conditions on the record name, type and action; `ListResourceRecordSets` on this zone; `GetChange`. B: `ChangeResourceRecordSets` on the zone with no conditions. C: the AWS-managed `AmazonRoute53FullAccess`.
+
+**Chosen: A.** The change statement uses `ForAllValues:StringEquals` on `route53:ChangeResourceRecordSetsNormalizedRecordNames` (`_acme-challenge.mail.<domain>`: lower case, no trailing dot), `route53:ChangeResourceRecordSetsRecordTypes` (`TXT`) and `route53:ChangeResourceRecordSetsActions` (`UPSERT`, `DELETE`), so every record in a request must match. `ListResourceRecordSets` can't be limited below the zone; lego uses it to merge existing TXT values, and it reveals nothing that public DNS doesn't. `GetChange` has no resource scoping beyond `change/*`. lego is given the zone ID, so `ListHostedZones` isn't granted. The domain and zone ARN come from Terraform data sources (as in decision 43), and Ansible looks up the zone ID from the laptop at run time with `amazon.aws.route53_info` and writes it into lego's environment file, like the dynamic inventory (decision 45). B and C give an attacker on proxy control of the lab's public names; C also allows creating zones.
+
+**Trade-off accepted.** The policy is longer and depends on condition keys whose exact semantics (normalized names, `ForAllValues` on multi-valued keys) must be right, so it is tested with the simulator before any host runs. Adding a second certificate name means editing the condition.
+
+**Verify once built.** `aws iam simulate-principal-policy` against the proxy role, with context entries for the three keys: TXT `UPSERT` of `_acme-challenge.mail.<domain>` is allowed; `UPSERT` of `vpn.<domain>` type A, TXT at another name, and `CREATE` are denied (`implicitDeny`); `route53:ListHostedZones` is denied. After the first certificate, CloudTrail shows only `ChangeResourceRecordSets`, `ListResourceRecordSets` and `GetChange` from the proxy role.
+
+## 61. TLS versions on proxy (2026-11-04)
+
+**Problem.** Nginx terminates TLS for `mail.<domain>`. Every protocol version and cipher it accepts is something to defend. TLS 1.3 removed RSA key exchange, CBC ciphers and renegotiation, and always gives forward secrecy; TLS 1.2 is still safe only when limited to ECDHE with AEAD ciphers.
+
+**Options.** A: TLS 1.3 only (Mozilla "modern"). B: TLS 1.2 and 1.3 with the ECDHE/AEAD list (Mozilla "intermediate"). C: Nginx's defaults on noble, which allow 1.2 and 1.3 with a broader cipher list.
+
+**Chosen: A.** The only clients are the admin's own current browsers inside the VPN, so 1.2's compatibility has no user. TLS 1.3 needs no cipher list (Nginx's 1.3 defaults are all AEAD), it matches the VPN's `tls-version-min 1.3`, and "1.2 is refused" is a simple, checkable claim for Phase 2. Alongside: `server_tokens off` so Nginx doesn't advertise its version; HSTS with a short `max-age` while certificates are staging, raised when production certificates arrive (2.6), so a mistake can't lock browsers out for long; no OCSP stapling, because Let's Encrypt has ended its OCSP service. B is the right answer for a public site with unknown clients, not this one. C would be a configuration nobody chose.
+
+**Trade-off accepted.** Any old client or tool without TLS 1.3 can't connect. Test tools in Phase 2 must support 1.3, which current curl, OpenSSL, nmap and ZAP do.
+
+**Verify once built.** From the VPN: `openssl s_client -connect 10.0.2.10:443 -servername mail.<domain> -tls1_2` fails with a handshake alert; with `-tls1_3` it succeeds, showing `TLSv1.3` and an ECDSA certificate. `curl -skI https://mail.<domain>` shows `Strict-Transport-Security` and a `Server: nginx` header with no version.

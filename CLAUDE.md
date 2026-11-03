@@ -12,7 +12,7 @@ Full design: `docs/ARCHITECTURE.md` — it is the source of truth. If something 
 
 ## Stack
 Terraform (`terraform/modules` shared, `terraform/persistent`, `terraform/lab`) · Ansible (`ansible/site.yml`, one role per host)
-OpenVPN (easy-rsa PKI) · nftables · Suricata (NFQUEUE on tun0) · Unbound · Nginx + ModSecurity v3 (OWASP CRS) + Certbot
+OpenVPN (easy-rsa PKI) · nftables · Suricata (NFQUEUE on tun0) · Unbound · Nginx + ModSecurity v3 (OWASP CRS) + lego (ACME)
 PostgreSQL · Wazuh · Docker · eu-central-1
 
 ## Hard rules
