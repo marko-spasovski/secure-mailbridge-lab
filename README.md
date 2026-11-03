@@ -75,7 +75,7 @@ flowchart LR
                 end
             end
             subgraph dmz["DMZ subnet<br/>10.0.2.0/24"]
-                proxy["EC2 proxy · 10.0.2.10<br/>Nginx · ModSecurity v3<br/>OWASP CRS · Certbot"]
+                proxy["EC2 proxy · 10.0.2.10<br/>Nginx · ModSecurity v3<br/>OWASP CRS · lego"]
             end
             subgraph appsn["App subnet<br/>10.0.3.0/24"]
                 app["EC2 app · 10.0.3.10<br/>Mailbridge in Docker"]
@@ -203,7 +203,7 @@ flowchart TB
             unbound["Unbound DNS"]
         end
         subgraph dmz["DMZ 10.0.2.0/24"]
-            proxy["proxy 10.0.2.10<br/>Nginx, ModSecurity + OWASP CRS, Certbot"]
+            proxy["proxy 10.0.2.10<br/>Nginx, ModSecurity + OWASP CRS, lego"]
         end
         subgraph apptier["APP 10.0.3.0/24"]
             app["app 10.0.3.10<br/>Mailbridge in Docker<br/>k3s in Tier 3"]
@@ -285,7 +285,7 @@ flowchart TB
 | Firewall | **nftables** | per-pool forwarding policy, NAT for private subnets, logged drops |
 | IPS | **Suricata** (NFQUEUE on `tun0`) | inline inspection of decrypted VPN traffic, ET Open + custom rules |
 | DNS | **Unbound** | private `mail.<domain>` record for VPN clients |
-| Reverse proxy / WAF | **Nginx** + **ModSecurity v3** (OWASP CRS) + **Certbot** | TLS (Let's Encrypt via DNS-01), rate limiting, web attack filtering |
+| Reverse proxy / WAF | **Nginx** + **ModSecurity v3** (OWASP CRS) + **lego** (ACME client) | TLS (Let's Encrypt via DNS-01), rate limiting, web attack filtering |
 | Application | **Mailbridge** in **Docker** | unified Gmail / Outlook inbox, image pulled from ECR by digest |
 | Database | **PostgreSQL** | app data; reachable only from the app host |
 | SIEM | **Wazuh** | collects Suricata, nftables, Nginx, ModSecurity, auth and OpenVPN logs |
