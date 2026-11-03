@@ -34,6 +34,11 @@ module "compute" {
   app_subnet_id         = module.network.subnet_ids["app"]
   app_security_group_id = module.security.security_group_ids["app"]
   ecr_repository_arn    = data.aws_ecr_repository.mailbridge.arn
+
+  proxy_subnet_id         = module.network.subnet_ids["dmz"]
+  proxy_security_group_id = module.security.security_group_ids["proxy"]
+  zone_id                 = data.aws_route53_zone.lab.zone_id
+  domain                  = var.domain
 }
 
 # Belongs to the persistent stack (decision 53), so lab only looks it up.

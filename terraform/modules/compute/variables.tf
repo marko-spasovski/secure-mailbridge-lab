@@ -31,7 +31,7 @@ variable "ssh_public_key" {
 }
 
 variable "hosts_enabled" {
-  description = "Session switch: false removes every session host (fw-ips and its Elastic IP, db) between sessions, so nothing idle is billed (decision 41). IAM and the key pair stay; they're free."
+  description = "Session switch: false removes every session host (fw-ips and its Elastic IP, db, app, proxy) between sessions, so nothing idle is billed (decision 41). IAM and the key pair stay; they're free."
   type        = bool
   default     = true
 }
@@ -82,5 +82,37 @@ variable "app_security_group_id" {
 
 variable "ecr_repository_arn" {
   description = "ARN of the mailbridge ECR repository in the persistent stack, the only one app may pull from."
+  type        = string
+}
+
+variable "proxy_instance_type" {
+  description = "proxy instance type (ARCHITECTURE.md §3)."
+  type        = string
+  default     = "t3.micro"
+}
+
+variable "proxy_subnet_id" {
+  description = "DMZ subnet from the network module."
+  type        = string
+}
+
+variable "proxy_private_ip" {
+  description = "proxy's fixed address, which Unbound's mail.<domain> record and app's TRUST_PROXY refer to."
+  type        = string
+  default     = "10.0.2.10"
+}
+
+variable "proxy_security_group_id" {
+  description = "sg-proxy from the security module."
+  type        = string
+}
+
+variable "zone_id" {
+  description = "Route 53 zone of the lab subdomain (persistent stack), the only zone proxy may write to."
+  type        = string
+}
+
+variable "domain" {
+  description = "Delegated lab subdomain; builds the one record name proxy may change (decision 60). Kept out of the repo (decision 29)."
   type        = string
 }
