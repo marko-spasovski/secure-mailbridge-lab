@@ -1,0 +1,204 @@
+---
+# Nginx with TLS from lego, task 1.15 part 1 (decisions 59, 60, 61). Runs
+# after the common role. ModSecurity and the rate limit follow in later parts.
+
+- name: Check that the lab domain is set
+  ansible.builtin.assert:
+    that: domain is defined and domain is match('^[a-z0-9.-]+$')
+    fail_msg: Set domain in group_vars/all/domain.yml (see domain.yml.example).
+    quiet: true
+
+# --- Nginx -----------------------------------------------------------------
+
+# From Ubuntu main (decision 58 keeps the web server on apt).
+- name: Install Nginx
+  ansible.builtin.apt:
+    name: nginx
+    state: present
+
+# The package's default site listens on port 80 on every address. Nothing
+# here uses port 80, so it isn't left listening even though sg-proxy blocks it.
+- name: Remove the default site
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: Reload Nginx
+
+- name: Enable and start Nginx
+  ansible.builtin.systemd_service:
+    name: nginx
+    enabled: true
+    state: started
+
+# --- lego --------------------------------------------------------------------
+
+# lego parses the CA's responses and talks to the internet, so it runs as
+# its own user and a bug in it can't become root (decision 59).
+- name: Create the lego system user
+  ansible.builtin.user:
+    name: lego
+    system: true
+    shell: /usr/sbin/nologin
+    home: /var/lib/lego
+    create_home: false
+
+# Only lego can read its account key and the certificate's private key.
+# Nginx's master process runs as root, so it can still load the key.
+- name: Create lego's data directory
+  ansible.builtin.file:
+    path: /var/lib/lego
+    state: directory
+    owner: lego
+    group: lego
+    mode: "0700"
+
+- name: Create the lego download and install directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /var/cache/lego
+    - /opt/lego/{{ proxy_lego_version }}
+
+# get_url refuses the file if the SHA-256 differs from the pinned value, and
+# skips the download when a file with that hash is already there.
+- name: Download the pinned lego release
+  ansible.builtin.get_url:
+    url: https://github.com/go-acme/lego/releases/download/v{{ proxy_lego_version }}/lego_v{{ proxy_lego_version }}_linux_amd64.tar.gz
+    dest: /var/cache/lego/lego_v{{ proxy_lego_version }}_linux_amd64.tar.gz
+    checksum: sha256:{{ proxy_lego_sha256 }}
+    owner: root
+    group: root
+    mode: "0644"
+
+# A versioned directory, like the CRS (decision 58): an update unpacks next
+# to the old one and only the link moves.
+- name: Unpack lego
+  ansible.builtin.unarchive:
+    src: /var/cache/lego/lego_v{{ proxy_lego_version }}_linux_amd64.tar.gz
+    dest: /opt/lego/{{ proxy_lego_version }}
+    remote_src: true
+    include:
+      - lego
+    owner: root
+    group: root
+    creates: /opt/lego/{{ proxy_lego_version }}/lego
+
+- name: Link the pinned lego into the PATH
+  ansible.builtin.file:
+    src: /opt/lego/{{ proxy_lego_version }}/lego
+    dest: /usr/local/bin/lego
+    state: link
+
+# Given the zone ID, lego doesn't list zones, so the role needs no
+# ListHostedZones (decision 60). The lookup runs on the laptop with the
+# admin's session; the playbook's own Python has boto3, the system one
+# doesn't.
+- name: Look up the lab zone's ID
+  amazon.aws.route53_info:
+    query: hosted_zone
+    hosted_zone_method: list_by_name
+    dns_name: "{{ domain }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  register: proxy_zone_lookup
+
+- name: Keep the zone ID
+  ansible.builtin.set_fact:
+    proxy_zone_id: >-
+      {{ (proxy_zone_lookup.hosted_zones
+          | selectattr('name', 'equalto', domain ~ '.')
+          | first).id | split('/') | last }}
+
+- name: Check the zone ID
+  ansible.builtin.assert:
+    that: proxy_zone_id is match('^Z[A-Z0-9]+$')
+    fail_msg: No public zone named {{ domain }} was found.
+    quiet: true
+
+# All of lego's settings, so the timer's service and the first run are the
+# same command. No secret: AWS credentials come from the instance role.
+- name: Create lego's config directory
+  ansible.builtin.file:
+    path: /etc/lego
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Write lego's settings
+  ansible.builtin.template:
+    src: lego.env.j2
+    dest: /etc/lego/lego.env
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install the reload step
+  ansible.builtin.copy:
+    src: lego-reload-nginx
+    dest: /usr/local/sbin/lego-reload-nginx
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install the renewal service and timer
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: /etc/systemd/system/{{ item }}
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - lego-renew.service
+    - lego-renew.timer
+  notify: Reload systemd
+
+- name: Load the new units before using them
+  ansible.builtin.meta: flush_handlers
+
+# The first certificate comes from the same service the timer runs, so the
+# first run also proves the timer's path. Only once: afterwards the timer
+# renews it.
+- name: Check for an existing certificate
+  ansible.builtin.stat:
+    path: /var/lib/lego/certificates/mail.{{ domain }}.crt
+  register: proxy_cert
+
+# A oneshot start waits until lego has finished.
+- name: Get the first certificate
+  ansible.builtin.systemd_service:
+    name: lego-renew.service
+    state: started
+  when: not proxy_cert.stat.exists
+
+- name: Enable the renewal timer
+  ansible.builtin.systemd_service:
+    name: lego-renew.timer
+    enabled: true
+    state: started
+
+# --- The site ----------------------------------------------------------------
+
+# Installed after the certificate exists, so Nginx never loads a missing file.
+- name: Install the mail site
+  ansible.builtin.template:
+    src: mail.conf.j2
+    dest: /etc/nginx/sites-available/mail.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload Nginx
+
+- name: Enable the mail site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/mail.conf
+    dest: /etc/nginx/sites-enabled/mail.conf
+    state: link
+  notify: Reload Nginx

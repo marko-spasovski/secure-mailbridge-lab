@@ -1,0 +1,48 @@
+# {{ ansible_managed }}
+# mail.<domain> on proxy (decision 61, Mailbridge docs/deployment.md §3).
+
+# A client that asks for any other name, or none, gets no certificate and no
+# site. ssl_protocols is repeated in each server: Nginx picks the protocol
+# from the default server before it knows the requested name.
+server {
+    listen {{ proxy_private_ip }}:443 ssl http2 default_server;
+    ssl_reject_handshake on;
+    ssl_protocols TLSv1.3;
+    server_tokens off;
+}
+
+server {
+    listen {{ proxy_private_ip }}:443 ssl http2;
+    server_name mail.{{ domain }};
+
+    ssl_certificate     /var/lib/lego/certificates/mail.{{ domain }}.crt;
+    ssl_certificate_key /var/lib/lego/certificates/mail.{{ domain }}.key;
+
+    # TLS 1.3 only (Mozilla "modern"); its ciphers need no list.
+    ssl_protocols TLSv1.3;
+    ssl_session_cache shared:mail_tls:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    server_tokens off;
+    add_header Strict-Transport-Security "max-age={{ proxy_hsts_max_age }}" always;
+
+    # The app accepts bodies up to 800 KB.
+    client_max_body_size 1m;
+
+    location / {
+        proxy_pass http://{{ proxy_app_upstream }};
+        proxy_http_version 1.1;
+
+        # proxy is the only hop in front of the app (TRUST_PROXY), so
+        # X-Forwarded-For is set to the real client, the VPN address, and a
+        # value the client sent is never passed on.
+        proxy_set_header Host              $host;
+        proxy_set_header X-Forwarded-For   $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_connect_timeout 10s;
+        proxy_send_timeout    60s;
+        proxy_read_timeout    60s;
+    }
+}

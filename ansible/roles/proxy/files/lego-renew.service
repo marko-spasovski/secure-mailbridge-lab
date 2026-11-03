@@ -1,0 +1,33 @@
+# Managed by Ansible (proxy role). Gets or renews the proxy's certificate
+# (decision 59). lego renews only when the certificate is due.
+[Unit]
+Description=Get or renew the proxy's certificate with lego
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=lego
+Group=lego
+EnvironmentFile=/etc/lego/lego.env
+ExecStart=/usr/local/bin/lego run
+# "+" runs only this line as root, outside the sandbox below.
+ExecStartPost=+/usr/local/sbin/lego-reload-nginx
+
+# lego needs the network and its own directory, nothing else.
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ReadWritePaths=/var/lib/lego
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native

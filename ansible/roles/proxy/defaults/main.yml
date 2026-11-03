@@ -1,0 +1,18 @@
+---
+# proxy's own address and the one upstream it forwards to (ARCHITECTURE.md §1).
+proxy_private_ip: 10.0.2.10
+proxy_app_upstream: 10.0.3.10:3000
+
+# lego, pinned like the image digest (decision 59). To update: download the
+# new linux_amd64 archive on the laptop, run
+#   gh attestation verify <archive> --repo go-acme/lego
+# and only then copy its SHA-256 here, in a PR.
+proxy_lego_version: 5.6.0
+proxy_lego_sha256: f02fc11b6f56b97e387fa7caa0268f86f5a336953b22458e6430e4651fea439a
+
+# Staging until Marko says to switch (CLAUDE.md, task 2.6).
+proxy_acme_server: https://acme-staging-v02.api.letsencrypt.org/directory
+
+# Short while certificates are staging, so a mistake can't pin browsers to
+# this host for long; raised with production certificates (decision 61).
+proxy_hsts_max_age: 300
