@@ -787,3 +787,15 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** The policy is longer and depends on condition keys whose exact semantics (normalized names, `ForAllValues` on multi-valued keys) must be right, so it is tested with the simulator before any host runs. Adding a second certificate name means editing the condition.
 
 **Verify once built.** `aws iam simulate-principal-policy` against the proxy role, with context entries for the three keys: TXT `UPSERT` of `_acme-challenge.mail.<domain>` is allowed; `UPSERT` of `vpn.<domain>` type A, TXT at another name, and `CREATE` are denied (`implicitDeny`); `route53:ListHostedZones` is denied. After the first certificate, CloudTrail shows only `ChangeResourceRecordSets`, `ListResourceRecordSets` and `GetChange` from the proxy role.
+
+## 61. TLS versions on proxy (2026-11-04)
+
+**Problem.** Nginx terminates TLS for `mail.<domain>`. Every protocol version and cipher it accepts is something to defend. TLS 1.3 removed RSA key exchange, CBC ciphers and renegotiation, and always gives forward secrecy; TLS 1.2 is still safe only when limited to ECDHE with AEAD ciphers.
+
+**Options.** A: TLS 1.3 only (Mozilla "modern"). B: TLS 1.2 and 1.3 with the ECDHE/AEAD list (Mozilla "intermediate"). C: Nginx's defaults on noble, which allow 1.2 and 1.3 with a broader cipher list.
+
+**Chosen: A.** The only clients are the admin's own current browsers inside the VPN, so 1.2's compatibility has no user. TLS 1.3 needs no cipher list (Nginx's 1.3 defaults are all AEAD), it matches the VPN's `tls-version-min 1.3`, and "1.2 is refused" is a simple, checkable claim for Phase 2. Alongside: `server_tokens off` so Nginx doesn't advertise its version; HSTS with a short `max-age` while certificates are staging, raised when production certificates arrive (2.6), so a mistake can't lock browsers out for long; no OCSP stapling, because Let's Encrypt has ended its OCSP service. B is the right answer for a public site with unknown clients, not this one. C would be a configuration nobody chose.
+
+**Trade-off accepted.** Any old client or tool without TLS 1.3 can't connect. Test tools in Phase 2 must support 1.3, which current curl, OpenSSL, nmap and ZAP do.
+
+**Verify once built.** From the VPN: `openssl s_client -connect 10.0.2.10:443 -servername mail.<domain> -tls1_2` fails with a handshake alert; with `-tls1_3` it succeeds, showing `TLSv1.3` and an ECDSA certificate. `curl -skI https://mail.<domain>` shows `Strict-Transport-Security` and a `Server: nginx` header with no version.
