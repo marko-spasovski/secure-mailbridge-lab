@@ -13,7 +13,8 @@ it is verified, and the relevant doc section is updated.
 ## Current position
 
 - **Phase:** 1, Tier 1 on AWS (0.6 and 0.7 still open)
-- **Next task:** 1.16, the `siem` host and the Wazuh role. 1.13 (`db`), 1.14 (`app`) and 1.15 (`proxy`) are done. Suricata rule review from the 1.15 re-test is open for Marko (1.12 note). The vuln target (2.7 to 2.16) is planned and gated after 1.17 and 1.19.
+- **Next tasks, in order:** 1.16 (`siem` host, Wazuh manager, indexer and dashboard), then 1.17 (Wazuh agents and log collection on every host), then the Juice Shop block (2.1 and 2.7 to 2.16). The full detection stack comes first, so every Juice Shop attack can be followed from nftables through Suricata and ModSecurity to Wazuh. Scenarios 2.2 to 2.5 are deferred until 2.16 is finished.
+- **Done:** 1.13 (`db`), 1.14 (`app`), 1.15 (`proxy`). The Suricata rules from PR 60 (decisions 79 to 81) are merged; their deploy and live re-test on fw-ips is pending.
 
 ## Before db (agreed 2026-11-02)
 
@@ -47,6 +48,7 @@ End every session with: Claude saves `terraform -chdir=terraform/lab plan -var h
 - [ ] **Own package mirror or proxy:** Marko wants to discuss this later. Parked until Tier 1 is finished; no design change yet.
 - [ ] **SSH over the VPN:** proposed as a daily-use path from the admin pool, with SSM kept for emergencies. Discuss after 1.9b; no design change yet.
 - [ ] **Keep the proxy certificate between sessions:** proxy is rebuilt every session, so it would request a new certificate each time. Fine on staging; production allows 5 duplicate certificates per week, so decide before 2.6 (for example, keep the lego account and certificate in SSM). Parked 2026-11-04.
+- [ ] **Evidence before teardown:** every host, `siem` included, is destroyed at the end of each session, so Wazuh's indexed data and each host's logs (`eve.json`, audit logs, kernel drop logs) are lost. Should they be exported to the laptop before each teardown, and if so what, and where (outside the repo)? Marko decides before 2.15.
 - [x] **Mailbridge repo location:** a separate repo, prepared for deployment on 2026-11-02 (its `docs/deployment.md`); the image is built from a clean export of a merged commit and pushed by hand (decision 57). OAuth secrets and redirect URI registration remain for 1.19.
 
 ---
@@ -155,6 +157,8 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
 - [ ] **1.17** Wazuh agents and log collection on all hosts (§8 list) · C
   - Verify: agents show active; a Suricata alert, an nftables drop, a ModSecurity block and a VPN connect all appear in Wazuh
   - Note: Juice Shop's logs and rules are added in 2.13 (decision 71)
+  - Note: before 2.15 starts, Wazuh must collect Suricata's `eve.json`, nftables drops (`FW-DROP`, `FW-EGRESS`, `FW-INPUT-DROP`), Nginx access and error logs, the ModSecurity audit log and OpenVPN connect and disconnect logs, each confirmed with a test event in the dashboard
+  - Note: all hosts, `siem` included, are destroyed at every teardown, so Wazuh's data and the logs on each host go with them. Open question for Marko: export Wazuh's data and the evidence to the laptop before each teardown? (Open items)
 
 **Close-out**
 - [ ] **1.18** CloudTrail to S3, GuardDuty trial · C
@@ -170,16 +174,9 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
 
 Targets: own deployment only, never Google/Microsoft APIs. Each one follows attack → detection or miss → rule/fix → re-test.
 
-- [ ] **2.1** Outside: scan, then SQLi/XSS/brute force against Juice Shop during a 443 window from Marko's /32 only; Mailbridge is never exposed and its SQLi/XSS tests run from inside the VPN (decision 72) · M
-- [ ] **2.2** Inside: stolen VPN cert: reachability, visibility, time to revoke via CRL; include private hosts querying 10.0.0.2 directly (decision 30) · M
-- [ ] **2.3** Malicious email: HTML/JS payload, sanitising, CSP · M
-- [ ] **2.4** Access control: user A reading user B's mailbox by changing IDs · M
-- [ ] **2.5** Complete `findings-report.md`; TCP 443 confirmed closed again · M
-  - Verify: each scenario has all four steps recorded
-- [ ] **2.6** Switch to production Let's Encrypt certs, only when Marko says so · M+C
-  - Verify: `curl https://mail.<domain>` succeeds without `-k`
+**Juice Shop block, first (decisions 67 to 76).** Done first in Phase 2, after 1.16 and 1.17, so Wazuh collects from every layer before anything is measured (decision 67 also names 1.19). Same layer loop: hand build → test → compare with code → rebuild from code → re-test. Flow logs stay S3-only.
 
-**Juice Shop ground truth (decisions 67 to 76).** Built after 1.17 and 1.19; Wazuh must collect before anything is measured. Same layer loop: hand build → test → compare with code → rebuild from code → re-test. Flow logs stay S3-only.
+- [ ] **2.1** Outside: scan, then SQLi/XSS/brute force against Juice Shop during a 443 window from Marko's /32 only; Mailbridge is never exposed and its SQLi/XSS tests run from inside the VPN (decision 72) · M (done inside this block, after 2.15)
 - [x] **2.7** Decisions 67 to 76 and the doc updates (ARCHITECTURE, TASKS, decisions, rationale, threat model) · C
   - Verify: Marko reviews the PR; ARCHITECTURE §1–4, 6–8, 11, 12 and the repo layout describe the vuln subnet, host, routes, listener and logs
 - [ ] **2.8** Network: `vuln` subnet 10.0.6.0/24 with its own route table (`0.0.0.0/0`, `10.0.2.0/24`, `10.0.5.0/24 → fw ENI`), `10.0.6.0/24 → fw ENI` on the private table, `sg-vuln`, the vuln NACL, and the sg-proxy and dmz NACL additions; built by hand, then imported · M+C
@@ -203,6 +200,17 @@ Targets: own deployment only, never Google/Microsoft APIs. Each one follows atta
   - Verify: `findings-report.md` has the matrix (block %, bypass %, false positives %) and one table per attack class
 - [ ] **2.16** Juice Shop window run (2.1) and its findings; window closed again · M
   - Verify: during the window only Marko's IP reaches 443; after it, `terraform plan` shows the window rules and record removed
+
+**Deferred until after 2.16.** Not started or planned before the Juice Shop block is finished: a known-vulnerable target first, to learn how ModSecurity, Suricata and Wazuh behave before attacking Mailbridge.
+- [ ] **2.2** Inside: stolen VPN cert: reachability, visibility, time to revoke via CRL; include private hosts querying 10.0.0.2 directly (decision 30) · M
+- [ ] **2.3** Malicious email: HTML/JS payload, sanitising, CSP · M
+- [ ] **2.4** Access control: user A reading user B's mailbox by changing IDs · M
+- [ ] **2.5** Complete `findings-report.md`; TCP 443 confirmed closed again · M
+  - Verify: each scenario has all four steps recorded
+
+**Any time, when Marko says so**
+- [ ] **2.6** Switch to production Let's Encrypt certs, only when Marko says so · M+C
+  - Verify: `curl https://mail.<domain>` succeeds without `-k`
 
 **Tier 1 is done here.** Tier 2 starts only after this write-up.
 
