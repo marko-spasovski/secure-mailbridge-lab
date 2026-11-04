@@ -44,3 +44,12 @@ proxy_crs_allowed_content_types: "|application/json|"
 # The same limit as Nginx's client_max_body_size. Profile photos are JSON up
 # to 800 KB, so the no-files limit must be this high too (default 128 KB).
 proxy_modsec_body_limit: 1048576
+
+# Rate limits per VPN client address (decisions 77, 78). The app keeps its
+# own 15-minute counters in Postgres; these stop bursts before they cost a
+# database write. Page loads fetch the HTML and its assets, so the general
+# burst is generous; the auth limit counts only POSTs.
+proxy_limit_general_rate: 20r/s
+proxy_limit_general_burst: 50
+proxy_limit_auth_rate: 6r/m
+proxy_limit_auth_burst: 5

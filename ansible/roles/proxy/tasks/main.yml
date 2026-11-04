@@ -1,7 +1,6 @@
 ---
-# Nginx with TLS from lego and ModSecurity with the CRS, task 1.15 parts 1
-# and 2 (decisions 58 to 66). Runs after the common role. The rate limit
-# follows in part 3.
+# Nginx with TLS from lego, ModSecurity with the CRS and rate limits, task
+# 1.15 (decisions 58 to 66, 77, 78). Runs after the common role.
 
 - name: Check that the lab domain is set
   ansible.builtin.assert:
@@ -283,6 +282,15 @@
     mode: "0644"
 
 # --- The site ----------------------------------------------------------------
+
+- name: Install the app forwarding snippet
+  ansible.builtin.template:
+    src: mail-proxy.conf.j2
+    dest: /etc/nginx/snippets/mail-proxy.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload Nginx
 
 # Installed after the certificate exists, so Nginx never loads a missing file.
 - name: Install the mail site

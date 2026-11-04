@@ -1,0 +1,17 @@
+# {{ ansible_managed }}
+# How the mail site forwards to the app (Mailbridge docs/deployment.md §3).
+# A snippet, because every location needs the same settings and a location
+# with its own limit_req doesn't inherit the server's.
+proxy_pass http://{{ proxy_app_upstream }};
+proxy_http_version 1.1;
+
+# proxy is the only hop in front of the app (TRUST_PROXY), so
+# X-Forwarded-For is set to the real client, the VPN address, and a value
+# the client sent is never passed on.
+proxy_set_header Host              $host;
+proxy_set_header X-Forwarded-For   $remote_addr;
+proxy_set_header X-Forwarded-Proto $scheme;
+
+proxy_connect_timeout 10s;
+proxy_send_timeout    60s;
+proxy_read_timeout    60s;

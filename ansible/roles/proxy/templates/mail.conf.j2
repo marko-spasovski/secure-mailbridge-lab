@@ -1,6 +1,18 @@
 # {{ ansible_managed }}
 # mail.<domain> on proxy (decision 61, Mailbridge docs/deployment.md §3).
 
+# Rate limits (decisions 77, 78), keyed by the client's address: VPN pools
+# aren't NATed, so this is the device. Requests over the limit get 429 and
+# never reach the app or its database (ModSecurity's header rules run
+# earlier, in the rewrite phase). The auth key is empty for anything but
+# POST, and an empty key isn't counted.
+limit_req_zone $binary_remote_addr zone=mail_general:10m rate={{ proxy_limit_general_rate }};
+map $request_method $mail_auth_key {
+    POST    $binary_remote_addr;
+    default "";
+}
+limit_req_zone $mail_auth_key zone=mail_auth:10m rate={{ proxy_limit_auth_rate }};
+
 # A client that asks for any other name, or none, gets no certificate and no
 # site. ssl_protocols is repeated in each server: Nginx picks the protocol
 # from the default server before it knows the requested name.
@@ -38,19 +50,20 @@ server {
     modsecurity on;
     modsecurity_rules_file /etc/nginx/modsec/main.conf;
 
+    # Logged at error: Ubuntu's error_log keeps error and above, so warn
+    # entries would never reach the file or Wazuh.
+    limit_req_status 429;
+    limit_req_log_level error;
+
     location / {
-        proxy_pass http://{{ proxy_app_upstream }};
-        proxy_http_version 1.1;
+        limit_req zone=mail_general burst={{ proxy_limit_general_burst }} nodelay;
+        include /etc/nginx/snippets/mail-proxy.conf;
+    }
 
-        # proxy is the only hop in front of the app (TRUST_PROXY), so
-        # X-Forwarded-For is set to the real client, the VPN address, and a
-        # value the client sent is never passed on.
-        proxy_set_header Host              $host;
-        proxy_set_header X-Forwarded-For   $remote_addr;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        proxy_connect_timeout 10s;
-        proxy_send_timeout    60s;
-        proxy_read_timeout    60s;
+    # Password guessing and mail-flooding paths: both limits apply.
+    location ~ ^/auth/(?:login|register|forgot|reset|password)$ {
+        limit_req zone=mail_general burst={{ proxy_limit_general_burst }} nodelay;
+        limit_req zone=mail_auth burst={{ proxy_limit_auth_burst }} nodelay;
+        include /etc/nginx/snippets/mail-proxy.conf;
     }
 }
