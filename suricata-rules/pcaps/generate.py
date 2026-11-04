@@ -81,6 +81,49 @@ def server_hello(version):
     return b"\x16" + struct.pack("!HH", version, len(handshake)) + handshake
 
 
+def client_hello13(sni, key_share_len):
+    """A TLS 1.3 ClientHello as current clients send it: record version 0x0301
+    and hello version 0x0303 (RFC 8446), supported_versions offering 1.3, and a
+    key share. 1216 bytes matches X25519MLKEM768 (OpenSSL 3.5 and later),
+    which makes the hello large enough to be split over two TCP segments."""
+    name = sni.encode()
+    server_name = struct.pack("!HBH", len(name) + 3, 0, len(name)) + name
+    ext = struct.pack("!HH", 0, len(server_name)) + server_name
+    versions = b"\x04\x03\x04\x03\x03"  # TLS 1.3, TLS 1.2
+    ext += struct.pack("!HH", 43, len(versions)) + versions
+    share = struct.pack("!HH", 0x11EC, key_share_len) + bytes(key_share_len)
+    shares = struct.pack("!H", len(share)) + share
+    ext += struct.pack("!HH", 51, len(shares)) + shares
+    extensions = struct.pack("!H", len(ext)) + ext
+    body = struct.pack("!H", 0x0303) + bytes(32) + b"\x00" + struct.pack("!HH", 2, 0x1301) + b"\x01\x00" + extensions
+    handshake = b"\x01" + struct.pack("!I", len(body))[1:] + body
+    return b"\x16" + struct.pack("!HH", 0x0301, len(handshake)) + handshake
+
+
+def split_session(client_data, server_data, mss, sport=40000):
+    """Like session(), but the client's data is sent in segments of at most
+    mss bytes, as a large ClientHello is over the VPN."""
+    c, s = 1000, 5000
+    out = [
+        tcp_packet(CLIENT, PROXY, sport, 443, c, 0, SYN),
+        tcp_packet(PROXY, CLIENT, 443, sport, s, c + 1, SYN | ACK),
+        tcp_packet(CLIENT, PROXY, sport, 443, c + 1, s + 1, ACK),
+    ]
+    c += 1
+    s += 1
+    for i in range(0, len(client_data), mss):
+        segment = client_data[i : i + mss]
+        out.append(tcp_packet(CLIENT, PROXY, sport, 443, c, s, PSH | ACK, segment))
+        c += len(segment)
+        out.append(tcp_packet(PROXY, CLIENT, 443, sport, s, c, ACK))
+    out.append(tcp_packet(PROXY, CLIENT, 443, sport, s, c, PSH | ACK, server_data))
+    s += len(server_data)
+    out.append(tcp_packet(CLIENT, PROXY, sport, 443, c, s, FIN | ACK))
+    out.append(tcp_packet(PROXY, CLIENT, 443, sport, s, c + 1, FIN | ACK))
+    out.append(tcp_packet(CLIENT, PROXY, sport, 443, c + 1, s + 1, ACK))
+    return out
+
+
 TLS10, TLS12 = 0x0301, 0x0303
 
 write_pcap("non-tls.pcap", session(b"tunnel data, not TLS\n" * 10, b"plain reply\n" * 10))
@@ -91,6 +134,11 @@ write_pcap("clean-tls.pcap", session(client_hello(TLS12, "mail.example.test"), s
 # What Nginx really sends back for any non-TLS bytes on 443 (seen live on
 # 2026-11-04): an HTTP 400. That reply is why text garbage gets labelled http.
 NGINX_400 = b"HTTP/1.1 400 Bad Request\r\nServer: nginx\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+# Realistic TLS 1.3 clients (added after the 2026-11-04 outage, decision 82).
+# None of them may raise any rule.
+write_pcap("tls13-small.pcap", session(client_hello13("mail.example.test", 32), server_hello(TLS12)))
+write_pcap("tls13-big-1seg.pcap", split_session(client_hello13("mail.example.test", 1216), server_hello(TLS12), 4000))
+write_pcap("tls13-big-2seg.pcap", split_session(client_hello13("mail.example.test", 1216), server_hello(TLS12), 1300))
 write_pcap("no-sni.pcap", session(client_hello(TLS12, None), server_hello(TLS12)))
 write_pcap("binary-nginx400.pcap", session(bytes(range(7, 71)), NGINX_400))
 write_pcap("text-nginx400.pcap", session(b"hello\n", NGINX_400))
