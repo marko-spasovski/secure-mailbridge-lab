@@ -25,6 +25,9 @@ server {
     ssl_session_tickets off;
 
     server_tokens off;
+    # Nginx alone sets HSTS (decision 62). The app sends its own one-year
+    # header, and browsers obey only the first of two, so it is dropped here.
+    proxy_hide_header Strict-Transport-Security;
     add_header Strict-Transport-Security "max-age={{ proxy_hsts_max_age }}" always;
 
     # The app accepts bodies up to 800 KB.
