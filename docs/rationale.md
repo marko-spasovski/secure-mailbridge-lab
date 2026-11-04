@@ -1051,3 +1051,27 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** No Suricata rule now blocks old TLS versions or non-SNI clients. Nginx still refuses everything below TLS 1.3 and handshakes without a known name, so the control remains, one hop later. The outage lasted about 10 minutes in a lab whose only user is the admin.
 
 **Verify once built.** The container replay of all twelve captures: `tls13-small`, `tls13-big-1seg`, `tls13-big-2seg` and `clean-tls` raise nothing, `tls10` raises 1000002 without `[Drop]`, and `no-sni` raises nothing (known gap). On fw-ips after deploying, `curl -sk https://mail.<domain>/healthz` returns 200 ten times in a row, and `fast.log` gains no 1000002 line.
+
+## 83. Close-out after the Juice Shop block (2026-11-04)
+
+**Problem.** Decision 67 gated the Juice Shop block after 1.17 and 1.19, so the close-out tasks (1.18 CloudTrail and GuardDuty, 1.19 the end-to-end OAuth check, 1.20 the rebuild from clean, 1.21 the docs pass) stood between the detection stack and the first measured attack.
+
+**Options.** A: close-out after the Juice Shop block. B: close-out before it, as decision 67 had it. C: split the close-out, with 1.18 before and 1.19 to 1.21 after.
+
+**Chosen: A.** Marko's goal is to measure attacks on the full stack as soon as it exists. With A, the rebuild from clean (1.20) and the outside scan (1.19) cover every host, the vuln target included, instead of being repeated after it's added. B finishes Tier 1's build first but delays the measurements for checks that don't affect them. C splits CloudTrail from the rest for little gain.
+
+**Trade-off accepted.** Juice Shop runs before GuardDuty and CloudTrail are confirmed, so AWS-level evidence of those sessions may be missing, and the Mailbridge OAuth path isn't tested end to end until later. The Juice Shop block doesn't need either.
+
+**Verify once built.** `TASKS.md` lists the order 1.16 → 1.17 → 1.22, 1.23 → Juice Shop block → 1.18 to 1.21 → 2.2 to 2.5, and 1.20's rebuild includes the vuln and mon hosts.
+
+## 84. Monitoring in Tier 1 (2026-11-04)
+
+**Problem.** Wazuh answers "is something malicious happening?". Nothing in Tier 1 answers "is everything healthy?". Today's session showed the gap: fw-ips's CPU credits were exhausted for the first hour after the rebuild, and two Ansible runs took 12 minutes, and only a CloudWatch query after the fact explained part of it. Attacks such as brute force or a WAF matrix run also have a health side: CPU, latency, 429 rates and availability.
+
+**Options.** A: move `mon` (former T2.1) into Tier 1, after 1.17 and before the Juice Shop block. B: Tier 1, but after the Juice Shop block. C: keep it in Tier 2.
+
+**Chosen: A.** Each Juice Shop run is then measured once with both views, security in Wazuh and health in Grafana, instead of replayed later for the health column. The design already exists in §4 and §8 (sg-mon, node_exporter, postgres_exporter, blackbox). It needs three additions. sg-proxy and the dmz NACL accept 443 from 10.0.5.20 for the blackbox probe. The probe targets 10.0.2.10 with the TLS server name set, because `mail.<domain>` resolves only through Unbound. The vuln host is scraped across fw-ips, with an nftables rule written by Marko and a security group rule naming mon's IP (decision 68). An Alertmanager rule on CPU credit balance near 0 covers the t3 `standard` credits. B leaves the Juice Shop runs without health data. C keeps today's blind spot through Phase 2.
+
+**Trade-off accepted.** About $0.024/hour more per session, with siem and mon together roughly $0.17/hour for the full set. One more host, role and rebuild. Retention on a session-only host is an open design question for 1.22, like Wazuh's data.
+
+**Verify once built.** Grafana answers from the admin pool and not from the user pool. Every Prometheus target is `up`, including the vuln host across fw-ips. The blackbox probe of `https://mail.<domain>` succeeds, and a forced failure fires and clears an alert.
