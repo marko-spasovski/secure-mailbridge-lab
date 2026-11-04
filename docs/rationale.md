@@ -1075,3 +1075,63 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** About $0.024/hour more per session, with siem and mon together roughly $0.17/hour for the full set. One more host, role and rebuild. Retention on a session-only host is an open design question for 1.22, like Wazuh's data.
 
 **Verify once built.** Grafana answers from the admin pool and not from the user pool. Every Prometheus target is `up`, including the vuln host across fw-ips. The blackbox probe of `https://mail.<domain>` succeeds, and a forced failure fires and clears an alert.
+
+## 85. Which Wazuh version (2026-11-04)
+
+**Problem.** Wazuh is the SIEM every Phase 2 finding depends on. On 2026-11-04 the stable release is 4.14.9 (15 October 2026), with 4.14.10 and 5.0 both at release candidate.
+
+**Options.** A: 4.14.9, pinned. B: 5.0 once it's released. C: always the latest release.
+
+**Chosen: A.** It's stable, the documentation targets it, and pinning means the version only changes through a reviewed PR, like lego, the CRS and the app image. B would wait for, and then build on, a new major version early in its life. C changes the measurement base without review.
+
+**Trade-off accepted.** Fixes in 4.14.10 and later arrive only when the pin is bumped, so the version needs checking at each session start, like the other pins.
+
+**Verify once built.** `apt-cache policy wazuh-manager wazuh-indexer wazuh-dashboard` shows 4.14.9 installed and held. The dashboard's About page shows 4.14.9.
+
+## 86. How Wazuh is installed (2026-11-04)
+
+**Problem.** Wazuh has four components on one host: the manager, Filebeat, the indexer (an OpenSearch fork) and the dashboard. They're tied together by TLS certificates and internal users. The quick path is one installer script.
+
+**Options.** A: Wazuh's apt repository with its signing key checked, and our own role following the step-by-step guide. B: the all-in-one script `wazuh-install.sh -a`. C: Wazuh's Ansible collection, or its Docker images.
+
+**Chosen: A.** Every package, file and setting is in the role, so a second run reports `changed=0`, drift shows up, and each line can be defended. That's the same approach as the Suricata, Unbound and Nginx roles. B is fast but isn't idempotent, configures many things at once, and writes every generated password to `wazuh-install-files.tar` on the host. That breaks CLAUDE.md's idempotency rule and the no-secrets-on-disk design. C is large generic code to pin and understand anyway, and Docker would put the SIEM behind a container boundary for its logs, certificates and data.
+
+**Trade-off accepted.** More work than the script: the role must reproduce the guide's steps in order (indexer, security initialisation, manager, Filebeat, dashboard), and a Wazuh update can change them.
+
+**Verify once built.** A second `site.yml` run on siem reports `changed=0`. `/etc/apt/sources.list.d/` shows only the Wazuh repository with a `signed-by` key whose fingerprint matches the one in the role. No `wazuh-install-files.tar` exists on the host.
+
+## 87. siem's size (2026-11-04)
+
+**Problem.** Wazuh recommends 4 vCPU and 8 GB of RAM for an all-in-one with up to 25 agents, and the indexer's Java heap at half the RAM. ARCHITECTURE planned a t3.medium (2 vCPU, 4 GB), with a t3.large if the indexer struggles. A new t3 with `standard` credits also starts with none, so it runs at its 20 % baseline until it earns some, as fw-ips showed on 2026-11-04.
+
+**Options.** A: t3.medium with a 1.5 GB heap, measured, with t3.large as the fallback. B: t3.large from the start. C: a non-burstable type.
+
+**Chosen: A.** Six lab agents produce a few events per second. The heap leaves about 2.5 GB for the manager, Filebeat, the dashboard (Node.js) and the OS. If the indexer runs out of heap or the dashboard is too slow, the fallback is one variable. It costs about $0.05/hour instead of $0.10. The first install gets long timeouts instead of a larger instance, because the slowness is the credit start, not lack of capacity. C costs more and breaks the t3 `standard` guardrail.
+
+**Trade-off accepted.** Less headroom: a Phase 2 run that floods events could push the indexer to its limit, and that is itself a measurement. The first boot of each session is slow.
+
+**Verify once built.** `GET _nodes/stats/jvm` shows a 1.5 GB heap, and the cluster health is green. `free -m` keeps available memory above about 300 MB during a test burst. The Alertmanager rule from 1.23 watches the credit balance.
+
+## 88. Where Wazuh's data lives (2026-11-04)
+
+**Problem.** Every host is destroyed at the end of each session (decision 41), siem included, so the indexer's alerts would be lost each time. Comparing one session's findings with the next, which is the point of Phase 2, needs them to persist.
+
+**Options.** A: a separate encrypted EBS volume in `persistent`, attached to each session's siem host by `lab` and mounted at the indexer's data path. B: no persistence, with a script exporting alerts to the laptop before each teardown. C: accept the loss.
+
+**Chosen: A.** A 20 GB gp3 volume costs about $1.90 a month and keeps the indexer's data, with its search and dashboards, across sessions. It must be in the same Availability Zone as the mgmt subnet, and `lab` owns only the attachment, so `hosts_enabled=false` detaches it without deleting it. The end-of-session routine stops the indexer before the apply, so its data is flushed cleanly. B loses search and adds a step every session. C makes the SIEM forget everything nightly.
+
+**Trade-off accepted.** A small permanent cost, and a resource that must never be destroyed by mistake (`prevent_destroy` in `persistent`). An unclean detach could need the indexer's recovery on the next start. Raw host logs (`eve.json`, kernel logs) still go with their hosts, unless the remaining open item decides otherwise.
+
+**Verify once built.** After a teardown and a new session, an alert from the previous session is still searchable. `terraform plan -var hosts_enabled=false` shows the attachment, not the volume, being destroyed. `lsblk` on siem shows the volume mounted at the indexer's data path.
+
+## 89. Wazuh's certificates and passwords (2026-11-04)
+
+**Problem.** The indexer, manager, Filebeat and dashboard authenticate each other with certificates from `wazuh-certs-tool`, and the indexer and API have internal users with passwords. Where they're made and kept decides whether they leak and whether they change every session.
+
+**Options.** A: passwords generated by `persistent` into write-only SSM values under `/siem/`, and certificates made once on the laptop and stored by hand under `/siem/`; siem's role reads `/siem/*` only. B: generate everything on the host at each build. C: put them in Ansible Vault in the repo.
+
+**Chosen: A.** It's the pattern the lab already uses: write-only values keep passwords out of Terraform state (decisions 46, 55), hand-stored parameters keep keys out of state (`/vpn/*`, decision 39), and a narrow grant limits who can read them (decision 22). The certificates stay the same across sessions, so the browser trusts Wazuh's CA once and the agents' view of the manager doesn't change. Each PEM file fits a standard SSM parameter (4 KB). B changes the dashboard certificate and passwords every session and leaves them on the host's disk. C puts encrypted secrets in a public repo.
+
+**Trade-off accepted.** Making the certificates is a manual laptop step, like signing VPN certificates. Their expiry must be tracked, and renewing them is a documented procedure.
+
+**Verify once built.** The IAM simulator allows siem's role `ssm:GetParameter` on `/siem/*` and denies `/mailbridge/*` and `/vpn/*`. Terraform state contains no Wazuh password. `grep -r` of the `-v` Ansible log finds no password value. The dashboard's certificate fingerprint is the same in two sessions.
