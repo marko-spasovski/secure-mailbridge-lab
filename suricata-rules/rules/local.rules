@@ -1,25 +1,58 @@
-# Custom Suricata rules, task 1.12.
+# Custom Suricata rules, tasks 1.12 and 1.15.
 # Written by Claude at Marko's explicit request.
 # Only traffic the firewall allowed reaches these rules. TLS ends at Nginx,
 # so they see TLS metadata and behaviour, not web payloads.
+#
+# Re-tested against real Nginx on 2026-11-04 (decisions 79 to 81). Nginx
+# answers any non-TLS bytes on 443 with an HTTP 400, and Suricata's protocol
+# detection looks at both directions, so the server's reply can label a
+# garbage stream "http".
 
-# Traffic on the only port VPN users may reach that isn't any known protocol.
-# Could be a tunnel. "failed" waits for protocol detection to finish. "!tls"
-# also fired on normal TLS, on packets sent before detection finished.
-alert tcp 10.8.0.0/23 any -> 10.0.2.10 443 (msg:"MAILBRIDGE unidentified protocol on proxy 443"; flow:established,to_server; app-layer-protocol:failed; classtype:policy-violation; sid:1000001; rev:1;)
+# --- Non-TLS on 443 (decision 79) ---------------------------------------------
+# Two rules, one alert per flow. Both test and set mb.nontls, and Suricata
+# runs rules that set a flowbit before rules that check it, so whichever
+# matches first is the only one that fires on that flow.
 
-# Plain HTTP on 443. Detection succeeds here, so the rule above doesn't match.
-alert http 10.8.0.0/23 any -> 10.0.2.10 443 (msg:"MAILBRIDGE plain HTTP on proxy 443"; flow:established,to_server; classtype:policy-violation; sid:1000005; rev:1;)
+# A stream that neither side makes recognisable, such as a tunnel whose
+# server doesn't answer like Nginx. With Nginx in front, binary garbage
+# usually ends up as 1000005 instead, because Nginx's HTTP 400 labels the
+# flow before detection fails on the client's side (live and in
+# binary-nginx400.pcap). Alert only: it depends on detection failing, which
+# is lower confidence than a positive match. "failed" waits for detection to finish;
+# "!tls" also fired on normal TLS, on packets sent before detection finished.
+alert tcp 10.8.0.0/23 any -> 10.0.2.10 443 (msg:"MAILBRIDGE unidentified protocol on proxy 443"; flow:established,to_server; app-layer-protocol:failed; flowbits:isnotset,mb.nontls; flowbits:set,mb.nontls; classtype:policy-violation; sid:1000001; rev:2;)
+
+# Plain HTTP on 443, or any garbage, text or binary, that Nginx's HTTP 400
+# reply made Suricata label http (seen live with "hello" and random bytes). Nothing
+# legitimate does this, and Nginx refuses it anyway, so it drops one hop
+# earlier (decision 81).
+drop http 10.8.0.0/23 any -> 10.0.2.10 443 (msg:"MAILBRIDGE non-TLS or plain HTTP on proxy 443"; flow:established,to_server; flowbits:isnotset,mb.nontls; flowbits:set,mb.nontls; classtype:policy-violation; sid:1000005; rev:2;)
+
+# --- TLS ClientHello ---------------------------------------------------------
 
 # TLS 1.0 client. A current browser doesn't offer this, so it suggests a
-# scanner or a downgrade attempt.
-alert tls 10.8.0.0/23 any -> 10.0.2.10 443 (msg:"MAILBRIDGE TLS 1.0 client to proxy"; flow:established,to_server; tls.version:1.0; classtype:policy-violation; sid:1000002; rev:1;)
+# scanner or a downgrade attempt. Nginx accepts only TLS 1.3 and refuses it
+# anyway, so it drops one hop earlier (decision 81).
+drop tls 10.8.0.0/23 any -> 10.0.2.10 443 (msg:"MAILBRIDGE TLS 1.0 client to proxy"; flow:established,to_server; tls.version:1.0; classtype:policy-violation; sid:1000002; rev:2;)
 
 # Server name other than mail.<domain>. Only the prefix is matched, so the
-# real domain stays out of this public repo.
+# real domain stays out of this public repo. A ClientHello without SNI has no
+# tls.sni buffer, so this rule can't match it; 1000006 covers that case.
+# Alert only until vuln.<domain> is allowed in task 2.9.
 alert tls 10.8.0.0/23 any -> 10.0.2.10 443 (msg:"MAILBRIDGE unexpected TLS server name"; flow:established,to_server; tls.sni; content:!"mail."; startswith; classtype:policy-violation; sid:1000003; rev:1;)
 
-# Connection flood from one client. The only rule that blocks: a first
-# threshold, to tune in scenario 2.2. to_server without "established",
-# because a SYN arrives before the handshake has completed.
+# ClientHello without SNI (decision 80). Every legitimate client names the
+# site, because Nginx's default server refuses unknown names. Seen live on
+# 2026-11-04 from openssl s_client without -servername, which 1000003 missed.
+# Suricata 7 has no "absent" keyword, so a silent helper marks flows that do
+# send a name, and the alert fires on a ClientHello from a flow it didn't
+# mark. The helper sets its flowbit first, as above.
+alert tls 10.8.0.0/23 any -> 10.0.2.10 443 (msg:"MAILBRIDGE helper: TLS server name present"; flow:established,to_server; tls.sni; content:"."; flowbits:set,mb.sni; flowbits:noalert; classtype:policy-violation; sid:1000007; rev:1;)
+alert tls 10.8.0.0/23 any -> 10.0.2.10 443 (msg:"MAILBRIDGE TLS client without server name"; flow:established,to_server; ssl_state:client_hello; flowbits:isnotset,mb.sni; flowbits:isnotset,mb.nosni; flowbits:set,mb.nosni; classtype:policy-violation; sid:1000006; rev:1;)
+
+# --- Volume ------------------------------------------------------------------
+
+# Connection flood from one client. A first threshold, to tune in scenario
+# 2.2. to_server without "established", because a SYN arrives before the
+# handshake has completed.
 drop tcp 10.8.0.0/23 any -> 10.0.2.10 443 (msg:"MAILBRIDGE connection flood to proxy"; flow:to_server; flags:S; detection_filter:track by_src, count 60, seconds 10; classtype:attempted-dos; sid:1000004; rev:2;)
