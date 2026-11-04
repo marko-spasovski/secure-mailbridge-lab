@@ -13,7 +13,7 @@ it is verified, and the relevant doc section is updated.
 ## Current position
 
 - **Phase:** 1, Tier 1 on AWS (0.6 and 0.7 still open)
-- **Next task:** 1.15, the `proxy` host and role (Nginx, TLS with Let's Encrypt staging, ModSecurity v3 + CRS). 1.13 (`db`) and 1.14 (`app`) are done. The app's Nginx requirements are in Mailbridge's `docs/deployment.md` §3: `X-Forwarded-Proto`, `X-Forwarded-For`, `Host`, request bodies of at least 800 KB, proxy timeouts of at least 60 s, the CRS JSON body processor.
+- **Next task:** 1.16, the `siem` host and the Wazuh role. 1.13 (`db`), 1.14 (`app`) and 1.15 (`proxy`) are done. Suricata rule review from the 1.15 re-test is open for Marko (1.12 note). The vuln target (2.7 to 2.16) is planned and gated after 1.17 and 1.19.
 
 ## Before db (agreed 2026-11-02)
 
@@ -123,7 +123,7 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Note: the role owns the whole `suricata.yaml`, installed with `copy` (decision 37)
   - Verify: `suricata -T` passes; `sudo tail -f eve.json` shows flows while using the VPN
 - [x] **1.12** Custom Suricata rules and test pcaps · **C** (Marko explicitly asked Claude to write these)
-  - Note: captures are synthetic, so re-test rules against real TLS in 1.15, then consider promoting them to `drop`. `reload-rules` was refused because a `suricata -r` test run replaced the daemon's command socket; tests on fw-ips use `--set unix-command.enabled=no` (decision 38).
+  - Note: captures are synthetic, so re-test rules against real TLS in 1.15, then consider promoting them to `drop`. Re-tested 2026-11-04 against real Nginx: 1000003 (SNI `other.test`), 1000002 (TLS 1.0 ClientHello) and 1000005 (plain HTTP to 443) fire; 1000005 alerts several times per flow; **1000001 never fires**, because Nginx answers any non-TLS bytes on 443 with an HTTP 400, so Suricata labels the flow `http`. Marko decides on rewriting 1000001, de-duplicating 1000005 and promoting to `drop`; 1000003 must allow `vuln.<domain>` in 2.9. `reload-rules` was refused because a `suricata -r` test run replaced the daemon's command socket; tests on fw-ips use `--set unix-command.enabled=no` (decision 38).
   - Verify: `suricata -k none -r <pcap> -S <rules> --set unix-command.enabled=no` raises the expected alert; live traffic is dropped inline
 
 **db, app, proxy**
@@ -140,13 +140,14 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Note: image `bb5c84f` pushed 2026-11-03 by hand (decision 57): one OCI manifest, about 90 MB; ECR's basic scan reports 5 HIGH, all in Debian base packages (zlib, util-linux, glibc), matching the app's Trivy result of 0 fixable HIGH/CRITICAL. The `app` role pins the digest in `defaults/main.yml`, with `db-roles.sql` from the same commit
   - Verified 2026-11-03: third `site.yml` run `changed=0` on all hosts; `/healthz` and `/health` (DB, as `mailbridge_app`) return 200; the container runs the pinned digest with `POSTGRES_USER=mailbridge_app` and the owner password 0 times in its env; no secret in any command line; IMDS from inside the container times out (hop limit 1); as `mailbridge_app`, `DROP TRIGGER audit_events_guard_row` gets "must be owner", `UPDATE audit_events`, `CREATE TABLE`, `TRUNCATE` and `pgmigrations` get "permission denied", `ALTER TABLE` gets "must be owner"; `systemctl stop` leaves `Result=success` and 0 containers; from the admin pool with a hand-added route, port 3000 times out and fw-ips logs `FW-DROP`. Fixed on the way: `ExecStop` failed on a container `--rm` had already removed (PR 46)
   - Verify: `docker inspect` shows the pinned digest; port 3000 reachable from proxy, unreachable from the VPN directly; `psql` to 10.0.4.10 as the app user connects (decision 48)
-- [~] **1.15** `proxy` role: Nginx, TLS, rate limit, ModSecurity v3 + CRS, lego with Route 53 DNS-01 (staging, decision 59) · C
+- [x] **1.15** `proxy` role: Nginx, TLS, rate limit, ModSecurity v3 + CRS, lego with Route 53 DNS-01 (staging, decision 59) · C
   - Note: lego is pinned in `defaults` by version and SHA-256; at each version bump the release's build provenance is checked on the laptop with `gh attestation verify` before the hash is committed. The role writes `lego-renew.service` and `lego-renew.timer` (decision 59). IAM grant: decision 60; Ansible looks up the zone ID from the laptop at run time and writes it into lego's environment file
   - Note: TLS 1.3 only, `server_tokens off`, HSTS with a short `max-age` on staging, no OCSP stapling (decision 61); Nginx owns HSTS and hides the app's header (decision 62)
   - Note: ModSecurity engine and Nginx connector from Ubuntu packages, CRS 4 from one pinned upstream release checked by SHA-256 (decision 58). CRS 4.25.0, because 4.25.1+ needs libmodsecurity ≥ 3.0.16; JSON bodies only (decision 63). Blocking, PL1, default thresholds (decisions 64, 65); audit log `ABFHZ`, flagged and 5xx only, root only (decision 66)
   - Note: tested before AWS in an Ubuntu 24.04 container with the real packages, 2026-11-04: 848 rules load; clean GET 200; SQLi in query and JSON body 403; XSS 403; PUT/PATCH/DELETE 200; 800 KB photo 200; non-data-URL photo 400 (rule 10010); XML and form bodies 403 (920420); audit log `600 root`, no bodies
   - Note: rate limits per client address, general 20 r/s burst 50 and auth POSTs 6/min burst 5, 429 logged at `error` (decisions 77, 78); tested in the container harness on 2026-11-04
   - Verify: `curl -k https://mail.<domain>` over VPN returns 200; `?id=1' OR '1'='1` gets 403 and is in the audit log; `nc -zv -w 3 10.0.4.10 5432` from proxy times out (decision 48)
+  - Verified 2026-11-04 on a proxy built from code: second run `changed=0`; `/healthz` 200 through VPN → Suricata → Nginx → app; TLS 1.3 only (`-tls1_2` gets alert 70); staging certificate from lego v5 (`(STAGING)` issuer, 64-day lifetime, files `0600 lego`, timer active); exactly one HSTS header, `max-age=300` (decision 62); `?id=1' OR '1'='1` 403 with 942100/949110 and `OWASP_CRS/4.25.0` in the audit log; XML body 403 (920420); audit log `600 root`; 30 login POSTs gave 8 app answers and 22 × 429, logged with `zone "mail_auth", client: 10.8.1.10` (no NAT); from proxy, 10.0.4.10:5432 times out and 10.0.3.10:3000 connects (decision 48, closes the 1.13 and 1.14 items)
 
 **siem**
 - [ ] **1.16** `siem` role: Wazuh manager, indexer, dashboard · C
