@@ -13,7 +13,7 @@ it is verified, and the relevant doc section is updated.
 ## Current position
 
 - **Phase:** 1, Tier 1 on AWS (0.6 and 0.7 still open)
-- **Next tasks, in order:** 1.16 (`siem` host, Wazuh manager, indexer and dashboard), then 1.17 (Wazuh agents and log collection on every host), then the Juice Shop block (2.1 and 2.7 to 2.16). The full detection stack comes first, so every Juice Shop attack can be followed from nftables through Suricata and ModSecurity to Wazuh. Scenarios 2.2 to 2.5 are deferred until 2.16 is finished.
+- **Next tasks, in order:** 1.16 (`siem` host, Wazuh manager, indexer and dashboard) → 1.17 (Wazuh agents and log collection on every host) → 1.22 and 1.23 (`mon`: Prometheus, Grafana, Alertmanager, exporters; moved into Tier 1, decision 84) → the Juice Shop block (2.1, 2.7 to 2.16) → close-out 1.18 to 1.21 (decision 83) → scenarios 2.2 to 2.5. The full detection and health stack comes first, so every Juice Shop attack can be followed from nftables through Suricata and ModSecurity to Wazuh, with its effect on the hosts visible in Grafana.
 - **Done:** 1.13 (`db`), 1.14 (`app`), 1.15 (`proxy`). The Suricata rules from PR 60 (decisions 79 to 81) are merged; their deploy and live re-test on fw-ips is pending.
 
 ## Before db (agreed 2026-11-02)
@@ -162,21 +162,19 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Note: before 2.15 starts, Wazuh must collect Suricata's `eve.json`, nftables drops (`FW-DROP`, `FW-EGRESS`, `FW-INPUT-DROP`), Nginx access and error logs, the ModSecurity audit log and OpenVPN connect and disconnect logs, each confirmed with a test event in the dashboard
   - Note: all hosts, `siem` included, are destroyed at every teardown, so Wazuh's data and the logs on each host go with them. Open question for Marko: export Wazuh's data and the evidence to the laptop before each teardown? (Open items)
 
-**Close-out**
-- [ ] **1.18** CloudTrail to S3, GuardDuty trial · C
-  - Verify: events visible; trial end date noted in `progress.md`
-- [ ] **1.19** End-to-end check: VPN, `https://mail.<domain>`, OAuth login with test accounts · M+C
-  - Verify: `nmap -sU -p 1194` and a TCP scan from outside show only UDP 1194 open
-- [ ] **1.20** Includes the deferred network rebuild (1.5c): `make up` rebuilds the lab from clean; second Ansible run is idempotent · M+C
-  - Verify: second run reports `changed=0`
-- [ ] **1.21** Update docs for any deviation; confirm teardown works · M+C
-  - Verify: after `terraform destroy` of `lab` (approved), no billable lab resources remain
+**mon (moved from Tier 2 as T2.1, decision 84).** After 1.17, before the Juice Shop block.
+- [ ] **1.22** `mon` host (10.0.5.20, t3.small) and role: Prometheus, Grafana and Alertmanager; Grafana reachable from the admin pool only (sg-mon, §4); design decisions first (install method, retention on a session-only host, alert channel) · C
+  - Verify: Grafana answers on 10.0.5.20:3000 from the admin pool and times out from the user pool; Prometheus shows its own target `up`
+  - Layer loop: hand build, compare with code, rebuild from code, second run `changed=0`
+- [ ] **1.23** Exporters and alerts: node_exporter on every host (the vuln host too, across fw-ips: nftables rule by Marko and SG rule by IP), postgres_exporter on db, blackbox_exporter probing `https://mail.<domain>` (sg-proxy and the dmz NACL accept 443 from 10.0.5.20); Alertmanager rules for host down, disk over 80 %, certificate under 14 days, probe failing, and CPU credit balance near 0 · C
+  - Verify: every target `up`; each alert fires once on a forced test (stop a host's exporter, a probe to a wrong name) and clears
+  - Note: `mail.<domain>` resolves only through Unbound (VPN-only, §6), and mon uses AmazonProvidedDNS, so the probe targets 10.0.2.10 and sets the TLS server name (`tls_config.server_name`) instead of resolving the name
 
 ## Phase 2: Attack scenarios (§11)
 
 Targets: own deployment only, never Google/Microsoft APIs. Each one follows attack → detection or miss → rule/fix → re-test.
 
-**Juice Shop block, first (decisions 67 to 76).** Done first in Phase 2, after 1.16 and 1.17, so Wazuh collects from every layer before anything is measured (decision 67 also names 1.19). Same layer loop: hand build → test → compare with code → rebuild from code → re-test. Flow logs stay S3-only.
+**Juice Shop block, first (decisions 67 to 76).** Done first in Phase 2, after 1.16, 1.17, 1.22 and 1.23, so Wazuh and Grafana collect from every layer before anything is measured (decision 83 replaces decision 67's 1.19 gate). Same layer loop: hand build → test → compare with code → rebuild from code → re-test. Flow logs stay S3-only.
 
 - [ ] **2.1** Outside: scan, then SQLi/XSS/brute force against Juice Shop during a 443 window from Marko's /32 only; Mailbridge is never exposed and its SQLi/XSS tests run from inside the VPN (decision 72) · M (done inside this block, after 2.15)
 - [x] **2.7** Decisions 67 to 76 and the doc updates (ARCHITECTURE, TASKS, decisions, rationale, threat model) · C
@@ -203,6 +201,16 @@ Targets: own deployment only, never Google/Microsoft APIs. Each one follows atta
 - [ ] **2.16** Juice Shop window run (2.1) and its findings; window closed again · M
   - Verify: during the window only Marko's IP reaches 443; after it, `terraform plan` shows the window rules and record removed
 
+**Close-out (after the Juice Shop block, decision 83)**
+- [ ] **1.18** CloudTrail to S3, GuardDuty trial · C
+  - Verify: events visible; trial end date noted in `progress.md`
+- [ ] **1.19** End-to-end check: VPN, `https://mail.<domain>`, OAuth login with test accounts · M+C
+  - Verify: `nmap -sU -p 1194` and a TCP scan from outside show only UDP 1194 open
+- [ ] **1.20** Includes the deferred network rebuild (1.5c): `make up` rebuilds the lab from clean; second Ansible run is idempotent · M+C
+  - Verify: second run reports `changed=0`
+- [ ] **1.21** Update docs for any deviation; confirm teardown works · M+C
+  - Verify: after `terraform destroy` of `lab` (approved), no billable lab resources remain
+
 **Deferred until after 2.16.** Not started or planned before the Juice Shop block is finished: a known-vulnerable target first, to learn how ModSecurity, Suricata and Wazuh behave before attacking Mailbridge.
 - [ ] **2.2** Inside: stolen VPN cert: reachability, visibility, time to revoke via CRL; include private hosts querying 10.0.0.2 directly (decision 30) · M
 - [ ] **2.3** Malicious email: HTML/JS payload, sanitising, CSP · M
@@ -218,7 +226,7 @@ Targets: own deployment only, never Google/Microsoft APIs. Each one follows atta
 
 ## Tier 2 (gated)
 
-- [ ] **T2.1** `mon` host: Prometheus, Grafana, Alertmanager, exporters
+- [x] **T2.1** Moved into Tier 1 as 1.22 and 1.23 (decision 84)
 - [ ] **T2.2** App CI (§10): Jest, Playwright, k6, Trivy, SonarCloud, ZAP baseline
 - [ ] **T2.3** S3 gateway endpoint with a separate `data` route table; nightly `pg_dump` to S3, plus a tested and documented restore
 - [ ] **T2.4** ModSecurity engine ≥ 3.0.16 and the current CRS 4.25.x (the official CRS image pinned by digest, or an LTS engine once one ships 3.0.16), closing the 4.25.1 fixes 4.25.0 lacks, including the JSON bypass 4RI-250413 (decision 63)

@@ -81,7 +81,7 @@ Deploy: Terraform (infra) + Ansible (config) · Teardown: `terraform destroy` wh
 | db | t3.micro | 20 GB | PostgreSQL | 1 |
 | siem | t3.medium (t3.large if the indexer struggles) | 50 GB | Wazuh | 1 |
 | vuln | t3.small | 10 GB | OWASP Juice Shop in Docker, from its own ECR repository by digest; exists only with `vuln_enabled` (decisions 67, 69, 74) | 1 (Phase 2) |
-| mon | t3.small | 20 GB | Prometheus, Grafana, Alertmanager | 2 |
+| mon | t3.small | 20 GB | Prometheus, Grafana, Alertmanager (moved into Tier 1, decision 84) | 1 |
 
 All instances: IMDSv2 required · SSM agent (admin access; Ansible uses SSH tunnelled through SSM to sshd on loopback, so port 22 is never open to any network) · unattended security updates · apt over HTTPS (regional Ubuntu mirror, port 80 stays closed) · Wazuh agent · node_exporter.
 
@@ -101,12 +101,14 @@ All instances: IMDSv2 required · SSM agent (admin access; Ansible uses SSH tunn
 | | all (to be routed/NATed) | 10.0.0.0/16 |
 | | TCP 443 | 0.0.0.0/0 — **test windows only** |
 | sg-proxy | TCP 443 | 10.8.0.0/22 (VPN pools) |
+| | TCP 443 | 10.0.5.20/32 (mon's blackbox probe, decision 84) |
 | sg-app | TCP 3000 | sg-proxy |
 | sg-db | TCP 5432 | sg-app |
 | sg-siem | TCP 1514, 1515 (agents) | 10.0.0.0/16 |
 | | TCP 443 (dashboard) | 10.8.1.0/24 (admin pool) |
 | sg-mon | TCP 3000 (Grafana) | 10.8.1.0/24 |
 | sg-vuln | TCP 3000 | 10.0.2.10/32 (proxy, by IP: decision 68) |
+| | TCP 9100 | 10.0.5.20/32 (mon, by IP: the path crosses fw-ips) |
 | sg-proxy | TCP 8443 | Marko's public IP /32 — **Juice Shop test windows only** (decision 72) |
 | all | TCP 9100 (node_exporter), 9187 (postgres_exporter on db) | sg-mon |
 
@@ -145,7 +147,7 @@ Baseline outbound: 110 TCP 443 to 0.0.0.0/0 · 120 UDP 123 to 0.0.0.0/0 · 130 U
 | Subnet | Inbound | Outbound |
 |---|---|---|
 | vuln (new) | 100 TCP 3000 from 10.0.2.0/24 · 105 deny TCP 3000 from 0.0.0.0/0 · 110 TCP eph from 0.0.0.0/0 · 120 UDP eph from 0.0.0.0/0 | baseline · 150 agents · 160 TCP eph to 10.0.2.0/24 |
-| dmz (added) | window only: TCP 8443 from Marko's /32 | 105 TCP 3000 to 10.0.6.0/24 · window only: TCP eph to Marko's /32 |
+| dmz (added) | 105 TCP 443 from 10.0.5.20/32 (mon's probe, decision 84) · window only: TCP 8443 from Marko's /32 | 105 TCP 3000 to 10.0.6.0/24 · window only: TCP eph to Marko's /32 |
 
 The vuln subnet has no rule to data, app or mgmt, so db, Mailbridge and Wazuh's dashboard are refused at its NACL as well as at its security group and on fw-ips. A Juice Shop window also needs inbound TCP 443 from Marko's /32 on public.
 
@@ -213,9 +215,10 @@ The vuln subnet has no rule to data, app or mgmt, so db, Mailbridge and Wazuh's 
 **Network evidence (VPC flow logs)**
 - All traffic metadata → S3 bucket in `persistent`, 30-day lifecycle. Used for investigation, including traffic that never crosses fw-ips. Not fed to Wazuh in Tier 1, including for Juice Shop.
 
-**Health (Prometheus/Grafana — "is everything healthy?")** — Tier 2
+**Health (Prometheus/Grafana — "is everything healthy?")** — Tier 1, after Wazuh (decision 84)
 - node_exporter on all VMs, postgres_exporter on db, blackbox_exporter probing `https://mail.<domain>`
-- Alertmanager → email/Discord: host down, disk > 80%, cert expiry < 14 days, probe failing
+- Alertmanager → email/Discord: host down, disk > 80%, cert expiry < 14 days, probe failing, CPU credit balance near 0 (t3 `standard` credits, decision 84)
+- The vuln host is scraped across fw-ips (decision 68): nftables allows 10.0.5.20 → 10.0.6.10:9100, and the security group names mon's IP
 
 ---
 
@@ -251,6 +254,7 @@ For each: attack → detection (or miss) → custom rule/fix → re-test.
 - AWS Budget alert at **$20** on day one
 - `terraform destroy` when not in use (stopped VMs still pay for disks + public IP). Between sessions, `terraform apply -var hosts_enabled=false` removes every session host (fw-ips with its Elastic IP and the `vpn` record, and the private hosts) (decision 51); the network stays up (decision 16). Each session starts with `terraform apply` and `ansible-playbook site.yml` (decision 41)
 - Approx. compute ~$0.15/hour for the full set — a few hours per week stays within credits (verify in AWS Pricing Calculator)
+- mon adds a t3.small (about $0.024/hour) and siem a t3.medium (about $0.05/hour); with both, a full session is roughly $0.17/hour (decision 84)
 - Juice Shop adds a t3.small (about $0.024/hour) and its 10 GB disk only while `vuln_enabled` is on, plus a few hundred MB in ECR; no hourly fixed resource (decision 74)
 
 ---
@@ -259,9 +263,9 @@ For each: attack → detection (or miss) → custom rule/fix → re-test.
 
 Everything runs on AWS. There is no VPS phase, and no VPS is used anywhere in this project.
 
-1. Tier 1 on AWS: network (VPC, subnets, IGW, routes, SGs — free) → fw-ips (OpenVPN, then NAT, because private hosts reach SSM through it) → db → app → proxy → siem. Built bottom-up, so each host is tested against its real dependency.
+1. Tier 1 on AWS: network (VPC, subnets, IGW, routes, SGs — free) → fw-ips (OpenVPN, then NAT, because private hosts reach SSM through it) → db → app → proxy → siem → mon (decision 84) → the vuln target (decision 67) → close-out (decision 83). Built bottom-up, so each host is tested against its real dependency.
 2. Tier 1 attack scenarios → findings report
-3. Tier 2: monitoring, CI, backups + restore test
+3. Tier 2: CI, backups + restore test (monitoring moved into Tier 1, decision 84)
 4. Tier 3: k3s for app tier, vuln scanning (Nuclei/Greenbone), ISO 27001/NIS2 controls map
 
 **Method for each layer:** build by hand → test → compare with code (`terraform import` + `plan`, or `ansible-playbook --check --diff`) → destroy and rebuild from code → re-test. The final state is always Terraform + Ansible. Exception: the network layer stays up between sessions and its rebuild test is deferred to task 1.20; paid resources are still removed after each session.
