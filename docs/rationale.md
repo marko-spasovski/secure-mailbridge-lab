@@ -979,3 +979,27 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** It's a procedure, not a technical control, so it's written into task 2.14 and the scope notes.
 
 **Verify once built.** In the Juice Shop profile, the browser's storage shows no cookie for `mail.<domain>`.
+
+## 77. Rate limits on proxy (2026-11-04)
+
+**Problem.** Mailbridge throttles sign-in, registration, password reset and sending in the app (for example, login: 50 per IP and 10 per account per 15 minutes). Each check is an `INSERT ... ON CONFLICT` in Postgres, so a fast flood of guesses turns into a flood of database writes on a t3.micro. Task 1.15 also asks for a rate limit at the edge.
+
+**Options.** A: two `limit_req` zones keyed by client address, a general one and a stricter one for POSTs to the auth paths. B: the auth zone only. C: the general zone only.
+
+**Chosen: A.** `limit_req` is a leaky bucket. Requests drain at the zone's rate, `burst` lets that many extra through, `nodelay` serves the burst at once instead of queueing it, and the rest get rejected before reaching the app. The general zone (20 r/s, burst 50) is far above a page load, which fetches the HTML and its assets. The auth zone (6 per minute, burst 5) counts only POSTs, through a `map` that gives other methods an empty key, so guessing gets 429 after about six tries without the database seeing the rest. The two layers do different jobs: Nginx cuts bursts cheaply, and the app enforces long windows and per-account counts it alone can see. The key `$binary_remote_addr` works because VPN pools aren't NATed. The proxy settings move into a snippet, because a location with its own `limit_req` doesn't inherit the server's. B leaves spiders and scanners pushing every request through ModSecurity and the app. C gives password guessing the same allowance as browsing. A connection limit isn't added, because Suricata rule 1000004 drops SYN floods per source.
+
+**Trade-off accepted.** ModSecurity still evaluates a limited request's headers, because the connector runs in Nginx's rewrite phase, before `limit_req` (preaccess). Several clients behind one address would share a bucket, which doesn't happen here. Fast scans in Phase 2 will see 429s, which is the control working, and is recorded as such.
+
+**Verify once built.** From the VPN, 30 quick POSTs to `/auth/login` give about six non-429 answers and then 429. GETs to the same path, a page load and other POSTs stay unaffected. The error log shows `limiting requests ... by zone "mail_auth", client: 10.8.x.x`. Tested on 2026-11-04 in the Ubuntu 24.04 container harness: 6 passed and 24 got 429; 40 parallel asset GETs all got 200; 120 back-to-back GETs gave 73 passed and 47 limited.
+
+## 78. What an over-limit client gets (2026-11-04)
+
+**Problem.** Nginx answers a limited request with 503 by default, and logs rejections at `error` and delays at one level below.
+
+**Options.** A: `429 Too Many Requests`, logged at `error`. B: the default 503. C: 429, logged at `warn`.
+
+**Chosen: A.** 429 is the HTTP status for exactly this, and clients and attack tools recognise it. 503 claims the service is down, which would mislead you and Tier 2's monitoring. C was the first plan, but Ubuntu's `nginx.conf` sets `error_log` to the default threshold, `error`, so `warn` lines are dropped. The container test showed 0 log lines at `warn` and 71 at `error`. Raising the whole server to `warn` would also admit unrelated notices.
+
+**Trade-off accepted.** Rate-limit lines are labelled `[error]` although nothing failed. The Wazuh rules in 1.17 match on `limiting requests`, not on the level.
+
+**Verify once built.** `curl -s -o /dev/null -w '%{http_code}'` on a limited request prints `429`. `grep 'limiting requests' /var/log/nginx/error.log` finds the client's VPN address.
