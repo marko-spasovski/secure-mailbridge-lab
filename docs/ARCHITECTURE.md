@@ -42,6 +42,10 @@ Deploy: Terraform (infra) + Ansible (config) · Teardown: `terraform destroy` wh
                    │ siem  10.0.5.10        │ Wazuh (manager + indexer + dashboard)
                    │ mon   10.0.5.20        │ Prometheus + Grafana + Alertmanager
                    └────────────────────────┘
+                   ┌────────────────────────┐
+                   │ VULN 10.0.6.0/24       │ own route table; reached only from proxy, through fw-ips
+                   │ vuln 10.0.6.10         │ OWASP Juice Shop (Docker), deliberately vulnerable target
+                   └────────────────────────┘
 
   Outside AWS: GitHub Actions → Jest/Playwright, k6, Trivy, SonarCloud, ZAP baseline
 ```
@@ -57,10 +61,12 @@ Deploy: Terraform (infra) + Ansible (config) · Teardown: `terraform destroy` wh
 | app | 10.0.3.0/24 | → fw-ips ENI | egress for Gmail/Graph APIs via fw |
 | data | 10.0.4.0/24 | → fw-ips ENI | + S3 **gateway endpoint** (free) for backups, added in Tier 2 (T2.3) |
 | mgmt | 10.0.5.0/24 | → fw-ips ENI | admin-only |
+| vuln | 10.0.6.0/24 | → fw-ips ENI | Juice Shop only, own route table; no general egress (decisions 67, 68) |
 
 - **VPN pools are routed, not NATed:** VPC route `10.8.0.0/16 → fw-ips ENI`. Nginx, Wazuh and Suricata see the real VPN client IP, so every event is attributable to a device certificate.
 - fw-ips: **source/destination check disabled**. Its ENI is a standalone resource, so routes can target it before the instance exists.
 - Tier 1 uses one private route table for dmz, app, data and mgmt. `data` gets its own table when the S3 endpoint is added.
+- **East-west inspection for Juice Shop (decision 68):** the private route table has `10.0.6.0/24 → fw-ips ENI` and the vuln table has `0.0.0.0/0`, `10.0.2.0/24` and `10.0.5.0/24 → fw-ips ENI`. These are more specific than the `local` route, which AWS allows when the destination is a whole subnet CIDR. So proxy→Juice Shop traffic is plain HTTP through fw-ips and Suricata. Mailbridge's proxy→app traffic keeps the direct `local` route, so mail never reaches Suricata's logs. Every path to the vuln subnet must be symmetric: the private table is shared with mgmt, so siem's replies to the Juice Shop agent go through fw-ips, and the agent's requests must too, or fw-ips sees half a connection and drops it. Security groups on these paths must name IP addresses, not other groups.
 - No NAT Gateway, no ALB, no interface endpoints (all bill hourly).
 
 ---
@@ -74,6 +80,7 @@ Deploy: Terraform (infra) + Ansible (config) · Teardown: `terraform destroy` wh
 | app | t3.small | 20 GB | Mailbridge in Docker | 1 |
 | db | t3.micro | 20 GB | PostgreSQL | 1 |
 | siem | t3.medium (t3.large if the indexer struggles) | 50 GB | Wazuh | 1 |
+| vuln | t3.small | 10 GB | OWASP Juice Shop in Docker, from its own ECR repository by digest; exists only with `vuln_enabled` (decisions 67, 69, 74) | 1 (Phase 2) |
 | mon | t3.small | 20 GB | Prometheus, Grafana, Alertmanager | 2 |
 
 All instances: IMDSv2 required · SSM agent (admin access; Ansible uses SSH tunnelled through SSM to sshd on loopback, so port 22 is never open to any network) · unattended security updates · apt over HTTPS (regional Ubuntu mirror, port 80 stays closed) · Wazuh agent · node_exporter.
@@ -82,6 +89,7 @@ All instances: IMDSv2 required · SSM agent (admin access; Ansible uses SSH tunn
 - fw-ips: its Elastic IP belongs to the `lab` stack and exists only during a session. Clients connect to `vpn.<domain>` (TTL 60), which `lab` updates on each apply.
 - app: pulls the Mailbridge image from ECR with its instance role, pinned by digest (`image@sha256:...`). The `mailbridge` repository is in `persistent`, with immutable tags, scanning on push and a lifecycle policy (decision 53).
 - proxy: lego (the ACME client) authenticates to Route 53 with its instance role; no stored DNS credentials (decision 59).
+- vuln: the container runs with `--cap-drop ALL`, `no-new-privileges`, memory and pids limits, its image's non-root user, no Docker socket, and a DNS server address that routes nowhere. The host's `DOCKER-USER` chain drops (and logs) every new connection from the container network, so SSRF or RCE in the container can't open anything outward. IMDS hop limit 1 keeps the container away from IMDS. The host never contacts Docker Hub (decision 69).
 
 ---
 
@@ -98,6 +106,8 @@ All instances: IMDSv2 required · SSM agent (admin access; Ansible uses SSH tunn
 | sg-siem | TCP 1514, 1515 (agents) | 10.0.0.0/16 |
 | | TCP 443 (dashboard) | 10.8.1.0/24 (admin pool) |
 | sg-mon | TCP 3000 (Grafana) | 10.8.1.0/24 |
+| sg-vuln | TCP 3000 | 10.0.2.10/32 (proxy, by IP: decision 68) |
+| sg-proxy | TCP 8443 | Marko's public IP /32 — **Juice Shop test windows only** (decision 72) |
 | all | TCP 9100 (node_exporter), 9187 (postgres_exporter on db) | sg-mon |
 
 **Egress (explicit, stateful replies need no rule):**
@@ -110,6 +120,9 @@ All instances: IMDSv2 required · SSM agent (admin access; Ansible uses SSH tunn
 | sg-proxy, sg-app, sg-db | TCP 1514, 1515 | sg-siem |
 | sg-proxy | TCP 3000 | sg-app |
 | sg-app | TCP 5432 | sg-db |
+| sg-proxy | TCP 3000 | 10.0.6.10/32 (Juice Shop, by IP) |
+| sg-vuln | TCP 443, UDP 123 | 0.0.0.0/0 (through fw-ips, logged; used for SSM, ECR and S3 image layers, not destination-filtered by name) |
+| | TCP 1514, 1515 | 10.0.5.10/32 (siem, by IP: the path crosses fw-ips) |
 
 The VPC default security group has no rules.
 
@@ -127,6 +140,15 @@ Second layer: Network ACLs per subnet mirroring the same flows. Third layer: nft
 
 Baseline outbound: 110 TCP 443 to 0.0.0.0/0 · 120 UDP 123 to 0.0.0.0/0 · 130 UDP 53 and 140 TCP 53 to 10.0.1.10/32. Agents: TCP 1514–1515 to 10.0.5.0/24. A 443 test window also needs inbound TCP 443 and outbound TCP eph to 0.0.0.0/0 on public.
 
+**Juice Shop additions (decisions 67, 68, 72):**
+
+| Subnet | Inbound | Outbound |
+|---|---|---|
+| vuln (new) | 100 TCP 3000 from 10.0.2.0/24 · 105 deny TCP 3000 from 0.0.0.0/0 · 110 TCP eph from 0.0.0.0/0 · 120 UDP eph from 0.0.0.0/0 | baseline · 150 agents · 160 TCP eph to 10.0.2.0/24 |
+| dmz (added) | window only: TCP 8443 from Marko's /32 | 105 TCP 3000 to 10.0.6.0/24 · window only: TCP eph to Marko's /32 |
+
+The vuln subnet has no rule to data, app or mgmt, so db, Mailbridge and Wazuh's dashboard are refused at its NACL as well as at its security group and on fw-ips. A Juice Shop window also needs inbound TCP 443 from Marko's /32 on public.
+
 **nftables on fw-ips (core rules):** fw-ips has one interface, so rules separate internet from VPC traffic by address. NAT applies only to private subnets going to non-VPC addresses, never to VPN pools.
 - `tun0` user pool (10.8.0.0/24) → only `10.0.2.10:443`
 - `tun0` admin pool (10.8.1.0/24) → proxy:443 + mgmt subnet
@@ -134,6 +156,7 @@ Baseline outbound: 110 TCP 443 to 0.0.0.0/0 · 120 UDP 123 to 0.0.0.0/0 · 130 U
 - to fw-ips itself: UDP 1194, DHCP replies, DNS to 10.0.1.10 from private subnets and VPN pools, ping from the admin pool only; `output` stays open
 - everything else: drop + log → Wazuh
 - forwarded `tun0` traffic → NFQUEUE → Suricata (inline, can drop), in a separate chain after the firewall rules, failing closed
+- Juice Shop (decisions 67, 68, 72), written by Marko in 2.9: proxy 10.0.2.10 → 10.0.6.10:3000 accepted and queued to Suricata; the vuln subnet is **not** in the private-subnet set, so it gets only explicit TCP 443 and UDP 123 to the internet (logged `FW-EGRESS`), TCP 1514–1515 to siem 10.0.5.10, and nothing else to any VPC address (dropped and logged); during a window, internet TCP 443 from Marko's /32 is DNATed to 10.0.2.10:8443 and queued to Suricata
 
 ---
 
@@ -146,6 +169,7 @@ Baseline outbound: 110 TCP 443 to 0.0.0.0/0 · 120 UDP 123 to 0.0.0.0/0 · 130 U
 - Pushed: routes to 10.0.2.0/24 and 10.0.1.10/32 (users) or + 10.0.5.0/24 (admins), DNS 10.0.1.10
 - Client profiles use `remote vpn.<domain> 1194 udp`, so they survive rebuilds
 - Client: `sudo openvpn --config marko-laptop.ovpn` → `https://mail.<domain>`
+- A separate **attacker** device certificate gets a user-pool address (10.8.0.x). Attacks come from it, never from the admin certificate, so logs separate attack traffic from administration (decision 73).
 
 ---
 
@@ -158,6 +182,7 @@ Baseline outbound: 110 TCP 443 to 0.0.0.0/0 · 120 UDP 123 to 0.0.0.0/0 · 130 U
 - **Staging certificates while building and rebuilding; switch to production certs once the setup is stable** (avoids Let's Encrypt rate limits).
 - DNS provider: **Route 53** public hosted zone in the `persistent` stack. `<domain>` is a subdomain of a domain Marko already owns, delegated by adding NS records for that subdomain at the parent's DNS provider. The parent domain stays where it is, and the real name stays out of this public repo.
 - Public records: `_acme-challenge.mail.<domain>` (TXT, lego) and `vpn.<domain>` (A, TTL 60, written by `lab`). `mail.<domain>` is never public.
+- Juice Shop (decisions 70, 72): Unbound adds `vuln.<domain> → 10.0.2.10`. proxy serves it with its **own** certificate (not a SAN on mail's), from a templated `lego-renew@<name>` service per name, with the decision 60 condition extended to `_acme-challenge.vuln.<domain>`. During a window, a public `vuln.<domain>` A record points at the Elastic IP, and fw-ips forwards to a **separate listener on 10.0.2.10:8443** that has only a handshake-refusing default server and the Juice Shop server. `mail.<domain>` has no server block on 8443, so it can't be reached from outside even by asking for its name.
 - OAuth redirects `https://mail.<domain>/accounts/callback/gmail` and `https://mail.<domain>/accounts/callback/outlook` (the app's own routes) work because the redirect happens in the browser, which is inside the tunnel.
 - Google/Microsoft OAuth apps stay in **testing mode, test accounts only**.
 
@@ -166,10 +191,11 @@ Baseline outbound: 110 TCP 443 to 0.0.0.0/0 · 120 UDP 123 to 0.0.0.0/0 · 130 U
 ## 7. Secrets & IAM
 
 - SSM Parameter Store (SecureString, `/mailbridge/*`): DB owner and runtime passwords (decision 54), session secret, token encryption key (decision 55), OAuth client secrets (1.19)
+- ECR repository `juice-shop` in `persistent`, separate from `mailbridge`: immutable tags, scan on push, KMS, lifecycle; filled by hand from Docker Hub by digest on the laptop (decision 69)
 - The DB password is generated by the `persistent` stack with an ephemeral `random_password` written to a write-only `value_wo`, so it never appears in Terraform state, plans, the repo or the laptop (decision 46)
 - Mailbox OAuth tokens encrypted in the DB by the app (key from Parameter Store)
 - The database has two roles: the owner `mailbridge` runs migrations only, and `mailbridge_app` (row access only) runs the app, so the app's credentials can't change the schema or the insert-only audit log (decision 54)
-- One IAM role per instance: all → `mailbridge-lab-ssm-min` (`AmazonSSMManagedInstanceCore` without `ssm:GetParameter` and `ssm:GetParameters`, so no host reads a parameter unless granted); fw-ips → read `/vpn/fw-ips/*` only; app → read `/mailbridge/*` + pull from the Mailbridge ECR repository only; proxy → `route53:ChangeResourceRecordSets` on this zone only for TXT `UPSERT`/`DELETE` of `_acme-challenge.mail.<domain>` (condition keys), `route53:ListResourceRecordSets` on this zone, `route53:GetChange`, and no `ListHostedZones` (decision 60); db → read `/mailbridge/db-password` and `/mailbridge/db-app-password` only, pulled on the host (decisions 47, 54); `s3:PutObject` on the backup prefix is added in T2.3
+- One IAM role per instance: all → `mailbridge-lab-ssm-min` (`AmazonSSMManagedInstanceCore` without `ssm:GetParameter` and `ssm:GetParameters`, so no host reads a parameter unless granted); fw-ips → read `/vpn/fw-ips/*` only; app → read `/mailbridge/*` + pull from the Mailbridge ECR repository only; proxy → `route53:ChangeResourceRecordSets` on this zone only for TXT `UPSERT`/`DELETE` of `_acme-challenge.mail.<domain>` (condition keys), `route53:ListResourceRecordSets` on this zone, `route53:GetChange`, and no `ListHostedZones` (decision 60); db → read `/mailbridge/db-password` and `/mailbridge/db-app-password` only, pulled on the host (decisions 47, 54); vuln → `ecr:GetAuthorizationToken` plus image pull on the `juice-shop` ECR repository only, nothing else (decision 69); proxy's ACME condition also covers `_acme-challenge.vuln.<domain>` (decision 70); `s3:PutObject` on the backup prefix is added in T2.3
 - No stored AWS keys on any instance: roles provide temporary credentials through IMDSv2
 - CloudTrail (management events) → S3 · GuardDuty free trial during testing
 - Terraform runs from the laptop with temporary `aws login` credentials; no access keys exist
@@ -181,9 +207,10 @@ Baseline outbound: 110 TCP 443 to 0.0.0.0/0 · 120 UDP 123 to 0.0.0.0/0 · 130 U
 
 **Security (Wazuh — "is something malicious happening?")**
 - Suricata `eve.json`, nftables drops, Nginx access/error logs + ModSecurity audit log, auth logs, OpenVPN connect/disconnect, file integrity monitoring
+- Juice Shop (decision 71): proxy runs one ModSecurity bundle per server, so Mailbridge and Juice Shop have their own engine mode and paranoia level. Juice Shop's audit log (`vuln-audit.log`) keeps request bodies (`ABCFHZ`), because its data is fake and the payload is the evidence; Mailbridge's keeps decision 66. Both audit logs and the per-server JSON access logs go to Wazuh, plus `DOCKER-USER` drops from the vuln host and Suricata's alerts on the decrypted proxy→Juice Shop path
 
 **Network evidence (VPC flow logs)**
-- All traffic metadata → S3 bucket in `persistent`, 30-day lifecycle. Used for investigation, including traffic that never crosses fw-ips. Not fed to Wazuh in Tier 1.
+- All traffic metadata → S3 bucket in `persistent`, 30-day lifecycle. Used for investigation, including traffic that never crosses fw-ips. Not fed to Wazuh in Tier 1, including for Juice Shop.
 
 **Health (Prometheus/Grafana — "is everything healthy?")** — Tier 2
 - node_exporter on all VMs, postgres_exporter on db, blackbox_exporter probing `https://mail.<domain>`
@@ -208,10 +235,11 @@ Jest + Supertest (API) · Playwright (UI) · k6 (load) · Trivy (image scan) · 
 
 | Position | Tests |
 |---|---|
-| Outside (internet) | Scan: only UDP 1194 should respond. During 443 window: SQLi/XSS/brute force vs ModSecurity; Suricata sees only traffic the firewall allowed, so TLS metadata and behaviour, not payloads, because TLS ends at Nginx. Scans of blocked ports appear as nftables drops |
+| Outside (internet) | Scan: only UDP 1194 should respond. During a 443 window (Marko's /32 only, Juice Shop only, decision 72): SQLi/XSS/brute force vs ModSecurity; Mailbridge is never exposed and is tested from inside the VPN; Suricata sees only traffic the firewall allowed, so TLS metadata and behaviour, not payloads, because TLS ends at Nginx. Scans of blocked ports appear as nftables drops |
 | Inside (stolen VPN cert) | What's reachable? What does Suricata/Wazuh see? Time to revoke via CRL? |
 | Malicious email | HTML/JS payload in an incoming email → is it sanitized? CSP? |
 | Access control | Can user A read user B's mailbox by changing IDs? |
+| Juice Shop ground truth (decisions 67–76) | The same attack classes against a known-vulnerable target from the attacker certificate: which layer blocks, detects or misses each, ModSecurity mode × paranoia level matrix, decrypted traffic for Suricata, egress containment of SSRF and RCE |
 
 For each: attack → detection (or miss) → custom rule/fix → re-test.
 
@@ -222,6 +250,7 @@ For each: attack → detection (or miss) → custom rule/fix → re-test.
 - AWS Budget alert at **$20** on day one
 - `terraform destroy` when not in use (stopped VMs still pay for disks + public IP). Between sessions, `terraform apply -var hosts_enabled=false` removes every session host (fw-ips with its Elastic IP and the `vpn` record, and the private hosts) (decision 51); the network stays up (decision 16). Each session starts with `terraform apply` and `ansible-playbook site.yml` (decision 41)
 - Approx. compute ~$0.15/hour for the full set — a few hours per week stays within credits (verify in AWS Pricing Calculator)
+- Juice Shop adds a t3.small (about $0.024/hour) and its 10 GB disk only while `vuln_enabled` is on, plus a few hundred MB in ECR; no hourly fixed resource (decision 74)
 
 ---
 
@@ -248,8 +277,9 @@ secure-mailbridge-lab/
     modules/      network/ security/ compute/   (shared)
     persistent/   created once, never destroyed: encrypted VPN CA backup + secrets, backup bucket, flow log bucket, state bucket, Route 53 zone, ECR repository, Budget
     lab/          VPC, subnets, SGs (free, kept between sessions) · VMs, Elastic IP, vpn.<domain> record (removed after every session) (uses modules/)
-  ansible/        roles: fw_ips/ proxy/ app/ db/ siem/ mon/   (Ansible role names cannot contain hyphens; the host stays fw-ips)
+  ansible/        roles: fw_ips/ proxy/ app/ db/ vuln/ siem/ mon/   (Ansible role names cannot contain hyphens; the host stays fw-ips)
   suricata-rules/ custom rules + test pcaps
+  attacks/        scope file and wrapper that refuses targets outside the lab (decision 75)
   docs/           ARCHITECTURE.md · TASKS.md · decisions.md · rationale.md · progress.md · threat-model.md · findings-report.md · iso27001-map.md
   .github/workflows/
   README.md       one-command deploy + teardown
