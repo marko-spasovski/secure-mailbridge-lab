@@ -39,6 +39,22 @@ module "compute" {
   proxy_security_group_id = module.security.security_group_ids["proxy"]
   zone_id                 = data.aws_route53_zone.lab.zone_id
   domain                  = var.domain
+
+  siem_subnet_id         = module.network.subnet_ids["mgmt"]
+  siem_security_group_id = module.security.security_group_ids["siem"]
+  siem_data_volume_id    = data.aws_ebs_volume.wazuh_data.id
+  siem_data_volume_az    = data.aws_ebs_volume.wazuh_data.availability_zone
+}
+
+# Belongs to the persistent stack (decision 88), so lab only looks it up and
+# attaches it.
+data "aws_ebs_volume" "wazuh_data" {
+  most_recent = true
+
+  filter {
+    name   = "tag:Name"
+    values = ["mailbridge-lab-wazuh-data"]
+  }
 }
 
 # Belongs to the persistent stack (decision 53), so lab only looks it up.

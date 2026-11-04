@@ -116,3 +116,35 @@ variable "domain" {
   description = "Delegated lab subdomain; builds the one record name proxy may change (decision 60). Kept out of the repo (decision 29)."
   type        = string
 }
+
+variable "siem_instance_type" {
+  description = "siem instance type; t3.large is the documented fallback if the indexer struggles (decision 87)."
+  type        = string
+  default     = "t3.medium"
+}
+
+variable "siem_subnet_id" {
+  description = "mgmt subnet from the network module."
+  type        = string
+}
+
+variable "siem_private_ip" {
+  description = "siem's fixed address, which agents and the admin pool's dashboard access use (ARCHITECTURE.md §1)."
+  type        = string
+  default     = "10.0.5.10"
+}
+
+variable "siem_security_group_id" {
+  description = "sg-siem from the security module."
+  type        = string
+}
+
+variable "siem_data_volume_id" {
+  description = "The Wazuh data volume from the persistent stack (decision 88)."
+  type        = string
+}
+
+variable "siem_data_volume_az" {
+  description = "Availability Zone of the Wazuh data volume, checked against the siem host's."
+  type        = string
+}
