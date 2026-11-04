@@ -949,3 +949,141 @@ The first run's journal showed `No such container: mailbridge` and the unit mark
 Task 1.15, proxy: Nginx with TLS from Let's Encrypt staging (DNS-01 through Route 53 with the proxy's instance role), ModSecurity v3 with the OWASP CRS, and rate limits. The app's requirements are written down in its `docs/deployment.md` §3: `X-Forwarded-Proto`, `X-Forwarded-For` and `Host`, request bodies of at least 800 KB, proxy timeouts of at least 60 s, and the CRS JSON body processor. 1.15 also closes the last check left from decision 48: proxy can reach app on 3000.
 
 The next session starts with the routine. Expect a 6-resource apply (fw-ips's 4, db, app). db comes up empty (decision 49), and app's start re-creates the schema and grants, so the routine itself proves both hosts rebuild from clean.
+
+## 2026-11-04
+
+### Today's topic: the edge of the lab, and how a security control breaks the thing it protects
+
+This was the longest session so far. It started just after midnight (the proxy's decisions and code), ran out of usage, and resumed in the evening after a full teardown. It finished task 1.15, the proxy: Nginx, TLS 1.3, a Let's Encrypt certificate through lego, ModSecurity with the OWASP CRS, and rate limits. It then re-tested the Suricata rules against real TLS, which ended in an outage caused by one of those rules. In between it planned a deliberately vulnerable target (Juice Shop on a `vuln` host), reordered the remaining work, moved monitoring into Tier 1, and wrote the first Terraform for Wazuh.
+
+### The big picture
+
+Until today, a request from the VPN reached nothing: the proxy didn't exist. Now the full path works: laptop → OpenVPN → nftables → Suricata (inline) → Nginx (TLS ends here) → ModSecurity → the app → PostgreSQL. Every layer has its own log, its own failure mode and its own way of being wrong. The session's lesson is that each control has to be tested against **real** traffic, because synthetic tests only prove what you thought to put in them. Three times today a real-world detail broke an assumption: an engine too old for its rules, an app sending its own security header, and a TLS handshake split over two packets.
+
+### Part 1: Starting again after losing access to the hosts
+
+The hosts had been torn down, so the session began with the routine. The first Ansible command failed with `agent refused operation`. Two separate problems were stacked. GNOME's `gcr-ssh-agent` lists every key in `~/.ssh` and ignores `ssh-add -D`, and it couldn't sign. Underneath that, the key's passphrase had been forgotten, and a passphrase can't be recovered: it's the key that decrypts the private key.
+
+The fix was a new key pair, and that taught something about Terraform. Changing `aws_key_pair`'s public key replaces only the key pair, because EC2 forces an instance replacement only when the key's **name** changes, and the name stayed the same. EC2 copies the public key into `authorized_keys` once, at launch, so the running hosts would still trust only the lost key. `terraform plan -replace=...` on the four instances rebuilt them in one apply. The fw-ips Elastic IP association wasn't replaced, because it's attached to the standalone ENI (decision 40), not to the instance. That's exactly why that design was chosen.
+
+Small but real: `terraform show` writes colour codes into a pipe, so `grep '^  #'` matched nothing until `-no-color` was added.
+
+### Part 2: The proxy's decisions
+
+- **Where ModSecurity comes from (58).** The engine and Nginx connector come from Ubuntu's packages, so the module always matches the Nginx binary. The CRS comes from one pinned upstream release, checked against a SHA-256. The CRS is where the detection value is, and Ubuntu's 3.3.5 is old.
+- **lego instead of Certbot (59).** One static Go binary, pinned by version and hash, with its build provenance checked with `gh attestation verify`. Certbot in noble is in universe without reliable security fixes. lego v5 also changed its CLI (`renew` is gone, `run` does both), which the v4 examples online would have got wrong.
+- **The DNS-01 IAM grant (60).** proxy is the most exposed host. An unconditioned `ChangeResourceRecordSets` would let an attacker there repoint `vpn.<domain>`. IAM condition keys (`ChangeResourceRecordSetsNormalizedRecordNames`, `...RecordTypes`, `...Actions`, with `ForAllValues`) limit it to `UPSERT` and `DELETE` of one TXT record. The IAM simulator proved it before any host ran: allowed for the challenge record, `implicitDeny` for the `vpn` A record, another TXT name, `CREATE` and `ListHostedZones`.
+- **TLS 1.3 only (61).** The only clients are the admin's own browsers, so TLS 1.2's compatibility buys nothing. An Nginx trap: `ssl_protocols` is taken from the **default** server on that address before Nginx knows the requested name, so both server blocks must set it.
+
+### Part 3: Two headers, one winner (decision 62)
+
+The first end-to-end request returned two `Strict-Transport-Security` headers: the app's one-year header first, then Nginx's 300 seconds. RFC 6797 says a browser obeys only the first. So the short staging value from decision 61, there to avoid pinning a browser to a broken certificate for a year, wasn't in force. `add_header` *adds*; it never replaces an upstream header. The fix is `proxy_hide_header` before `add_header`, so the TLS endpoint, Nginx, owns the header. The general idea: when two layers set the same security header, decide which one owns it.
+
+### Part 4: Test before AWS, and the engine that was too old (decision 63)
+
+The ModSecurity configuration was tested in a throwaway Ubuntu 24.04 container with the real packages before any host saw it. The first run failed: CRS 4.25.2 wouldn't load (`Rules error ... REQUEST-901 ... Line 333`). The CRS changelog for 4.25.1 says it needs libmodsecurity 3.0.16 or later. Ubuntu 24.04 ships 3.0.12, and 26.04 LTS only 3.0.14. A WAF is two pieces that must match, the engine and the rules, and the rules move faster than distribution engines.
+
+The choice was CRS 4.25.0, the last release that loads, with what it lacks written down: an XML attribute fix (closed by accepting only JSON bodies, since the app takes nothing else), ReDoS hardening (capped by `SecPcreMatchLimit`) and a JSON-encoding bypass fix (accepted, and something to measure in Phase 2). Moving to a newer engine is a Tier 2 task. In an interview: "The fix needs an engine my LTS doesn't ship. I measured what I lose, closed the part I could, and scheduled the rest."
+
+The container also caught three things that would have broken the app:
+- the CRS's default allowed methods (no PUT, PATCH, DELETE)
+- ModSecurity's 128 KB limit for bodies without files (the app's profile photos are 800 KB of JSON)
+- random base64 in those photos tripping attack rules
+
+For the last one, the fix wasn't to switch rules off. A local rule enforces the exact data-URL shape the app accepts (a positive security model), and only then are the attack rules skipped for that one field on that one route.
+
+### Part 5: Blocking, paranoia and what a log may hold (64 to 66)
+
+The CRS uses anomaly scoring: each matching rule adds points, and REQUEST-949 blocks at the threshold. With one admin over the VPN, a false positive costs a 403, so blocking started on day one at paranoia level 1. The audit log gets parts `ABFHZ`: headers and matched rules, no bodies. It goes to the SIEM, and v3 can't mask fields, so mail text and OAuth codes must never enter it. libmodsecurity 3.0.12 ignores `SecAuditLogFileMode`, so Ansible creates the file `0600` itself, without changing its timestamps so the run stays idempotent.
+
+### Part 6: Rate limits as a leaky bucket (77, 78)
+
+The app already throttles logins in Postgres, so every guess costs a database write. Nginx's `limit_req` is a leaky bucket: requests drain at a rate, `burst` lets that many extra through, `nodelay` serves them at once, and the rest get `429` before reaching the app. The live test gave six `401`s from the app and then `429`s, with two more `401`s in the middle. Those weren't a bug: 6 per minute means one new token every 10 seconds, and the loop took about 30 seconds. The log line named the zone and the real VPN address (no NAT). Two details: Ubuntu's `error_log` keeps only `error`, so `warn` lines vanish. And ModSecurity's connector runs in Nginx's rewrite phase, before `limit_req` (preaccess), so the limit protects the app, not ModSecurity.
+
+### Part 7: Planning a deliberately vulnerable target (67 to 76)
+
+Juice Shop has RCE and SSRF challenges by design, so placement is about blast radius. Next to Mailbridge it would share the kernel, the instance role, the secrets file and the path to the database. It gets its own host and subnet instead, with egress locked at the container (`DOCKER-USER`, unroutable DNS) and again outside the host (SG, NACL, nftables). Two AWS details came out of the planning. You can route traffic **between subnets** through an appliance with a route more specific than `local`, which gives Suricata the decrypted proxy→Juice Shop HTTP for free. But a security group can't reference another group across such a route, and the routes must be **symmetric**, or the firewall sees half a connection and drops it. That second point was caught while writing ARCHITECTURE: siem's replies would have crossed fw-ips while the agent's requests didn't. Also: two sibling subdomains are the same **site**, so `SameSite=Lax` doesn't separate them. Juice Shop gets its own browser profile.
+
+The work was then reordered: Wazuh (1.16, 1.17), then monitoring (1.22, 1.23, moved into Tier 1), then Juice Shop, then the close-out. Every attack can then be followed through every layer, with its effect on the hosts, in one run.
+
+### Part 8: The outage (decisions 79 to 82)
+
+The Suricata rules from 1.12 were re-tested against real Nginx:
+- **One rule never fired**, because Nginx answers any non-TLS bytes with an HTTP 400 and Suricata's protocol detection looks at both directions. The server's reply labelled the flow `http`.
+- **Binary garbage did reach the "unidentified protocol" rule**, so it was kept, and the two rules now share a flowbit so each flow gives one alert.
+- **A no-SNI rule was added**, because a client without SNI has no `tls.sni` buffer, and a negated content match has nothing to test.
+
+Then two rules were promoted to `drop`, and Mailbridge stopped answering. `fast.log` showed `[Drop]` on the TLS 1.0 rule for normal `curl`s.
+
+The first explanation (every ClientHello's record header says 0x0301) was **disproved** in the container. The real cause was found by changing one variable at a time. Current OpenSSL sends a post-quantum key share (X25519MLKEM768), which makes the ClientHello about 1,300 bytes. When that splits over two TCP segments, Suricata evaluates the rule on the first segment, where only the record header is known. The no-SNI rule had the same timing flaw. Service was restored in a minute by a hand edit and a rule reload, then the fix went through code: `ssl_state:client_hello` on 1000002, alert only, and the no-SNI rule disabled until a rewrite is tested. Three realistic TLS 1.3 captures now have to stay silent on every rule change.
+
+What it teaches:
+- an inline IPS fails **closed**, so a false positive is an outage
+- `drop` belongs only on rules proven against realistic traffic, over a whole session
+- synthetic test data is only as good as its realism
+- `tail -8` hides history: the rule had misfired before, but nobody counted
+
+### Part 9: Wazuh's first decisions (85 to 89)
+
+Wazuh 4.14.9, pinned. Installed from its apt repository by our own role, not the all-in-one script, which isn't idempotent and leaves passwords in a tar file. A t3.medium with a 1.5 GB indexer heap, with t3.large as the fallback. The indexer's data lives on an encrypted volume in `persistent`, attached each session, with `stop_instance_before_detaching` so the OS shuts the indexer down cleanly. Passwords are generated into write-only SSM values (the Wazuh API needs its own character set), and certificates are made once on the laptop. A precondition stops the attachment from planning if the volume and the host are in different Availability Zones.
+
+One process slip: the Terraform PR was merged before the teardown, so the teardown plan would have failed looking up a volume that didn't exist yet. Applying `persistent` first fixed it. The lesson is to check what a merge changes for the *next* command, not only for the code.
+
+### Mistakes and what they taught
+
+- **A lost passphrase** can't be recovered. Keep it in a password manager before typing it twice.
+- **"Only the key changed" in a plan doesn't mean the hosts get the new key.** Read what forces replacement.
+- **`terraform show` adds colour codes in a pipe.** Use `-no-color` for grep.
+- **A glob that matched two files** (`mail.*.crt` also matched `.issuer.crt`) broke `openssl -in`.
+- **Running Ansible from the repo root** found no inventory. `ansible.cfg` is read from the current directory.
+- **`curl -w '%{ssl_version}'`** isn't a curl variable. Check before suggesting one.
+- **A predicted 90-day certificate** was 64 days: Let's Encrypt is shortening lifetimes, and staging gets each step first.
+- **GitHub Actions lost a PR's trigger event** during an incident. Reopening the PR sent a new one.
+- **A rule promoted to `drop` on synthetic evidence** caused the outage. Realistic captures and a live session come first.
+- **A hypothesis presented as the cause** was then disproved. Test it before stating it, and say so when it's wrong.
+
+### Decisions from this session
+
+| # | Topic | Choice | Why |
+|---|---|---|---|
+| 58 | ModSecurity sources | Ubuntu engine and connector, pinned upstream CRS | Module matches Nginx; current rules |
+| 59 | ACME client | lego, pinned by hash and provenance | Static binary; no Python on the DMZ host |
+| 60 | DNS-01 grant | One TXT record, UPSERT/DELETE, condition keys | An attacker on proxy can't repoint `vpn` |
+| 61 | TLS | 1.3 only, HSTS short on staging, no OCSP | Only modern clients; matches the VPN |
+| 62 | HSTS owner | Nginx hides the app's header | Browsers obey the first header |
+| 63 | CRS version | 4.25.0, JSON-only bodies, engine move in T2.4 | 4.25.1+ needs an engine no LTS ships |
+| 64 | Engine mode | Blocking from day one | One admin; false positives found early |
+| 65 | Paranoia level | 1 | Baseline for bypass testing |
+| 66 | Audit log | `ABFHZ`, flagged and 5xx, root only | No mail or tokens in the SIEM |
+| 67–76 | Vuln target | Own host and subnet, routed through fw-ips, own ECR repo, cert, WAF bundle, window, attacker cert, switch, scope, browser profile | Blast radius and measurement |
+| 77, 78 | Rate limits | Two zones, 429 logged at `error` | Cheap at the edge; visible to Wazuh |
+| 79–82 | Suricata | Shared flowbit; no-SNI rule (disabled); drops amended after the outage | Real-TLS behaviour |
+| 83, 84 | Order | Close-out after Juice Shop; mon in Tier 1 | Measure on the full stack once |
+| 85–89 | Wazuh | 4.14.9, own role, t3.medium, persistent volume, SSM secrets | Idempotent, survives teardown, no secrets on disk |
+
+### Interview questions to practise
+
+1. Why does changing an EC2 key pair's public key not reach running instances? How did you fix it in one apply?
+2. What does `terraform plan -replace` do, and how is it safer than `terraform taint`?
+3. How do IAM condition keys limit Route 53 changes to one record? How did you prove it before running anything?
+4. Why must `ssl_protocols` be set on Nginx's default server too?
+5. Two `Strict-Transport-Security` headers arrive. Which one wins, and how did you make the right one win?
+6. Why can a newer OWASP CRS fail to load, and how did you decide which version to run?
+7. What's a positive security model, and how did you use one for the photo upload?
+8. Explain CRS anomaly scoring and paranoia levels. Why start blocking at PL1?
+9. What goes into a ModSecurity audit log, and what did you keep out of it?
+10. Explain `limit_req` as a leaky bucket. Why did two `401`s appear in the middle of the `429`s?
+11. Why does an app-level login throttle not replace an edge rate limit?
+12. Why does Suricata label garbage sent to Nginx as `http`?
+13. Why can't a negated `content` match find a missing SNI?
+14. How did a TLS 1.3 handshake trigger a "TLS 1.0" rule? How did you find the real cause?
+15. When should an inline IPS rule `drop` rather than `alert`?
+16. Why does routing traffic between subnets through an appliance require symmetric routes and IP-based security group rules?
+17. Why put a deliberately vulnerable app on its own host instead of in a locked container next to the real app?
+18. Two subdomains of one domain: same site or same origin? What does that mean for `SameSite=Lax`?
+19. Why keep a SIEM's data on its own volume, and how is it shut down cleanly before detaching?
+20. Why install Wazuh with your own role instead of its all-in-one script?
+
+### What comes next
+
+Task 1.16, part 2: the Wazuh certificates, made once on the laptop with `wazuh-certs-tool` and stored under `/siem/`. Then part 3, the role: the indexer, its security initialisation, the manager and Filebeat, and the dashboard. The next session starts with a plain `ssh-agent` in the Ansible terminal, then the routine. Expect `9 to add`: fw-ips's 4, db, app, proxy, siem and the volume attachment. siem starts with no CPU credits, so its first run will be slow.
