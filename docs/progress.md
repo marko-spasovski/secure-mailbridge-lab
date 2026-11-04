@@ -80,3 +80,6 @@ Update at the end of every session: what was done, what's verified, next step.
 - Not done: "proxy reaches app" (1.15); OAuth secrets and redirect URI registration (1.19); the Mailbridge repo's old-name cleanup (its item 3); the `origin` remote still points at the old GitHub owner and works through a redirect.
 - Cost: between sessions, only free or near-free resources remain (network, IAM, SSM parameters, the Route 53 zone, about 90 MB in ECR).
 - Next: `Read START.md`, run the session routine (expect `6 added`; db comes up empty and app's start rebuilds the schema and grants), then task 1.15, proxy.
+
+## 2026-11-04
+- Order of work changed (Marko): 1.16 and 1.17 first, then the Juice Shop block (2.1, 2.7 to 2.16), and only then scenarios 2.2 to 2.5. Reason: build the full detection stack first, so every Juice Shop attack can be followed from the firewall (nftables) through Suricata and ModSecurity to Wazuh before attacking anything else, and learn how those layers behave on a known-vulnerable target before attacking Mailbridge. Tier 2 still waits for the Tier 1 write-up. The full session entry follows at wrap-up.
