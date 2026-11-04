@@ -152,6 +152,7 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Verify: dashboard reachable from the admin pool only
 - [ ] **1.17** Wazuh agents and log collection on all hosts (§8 list) · C
   - Verify: agents show active; a Suricata alert, an nftables drop, a ModSecurity block and a VPN connect all appear in Wazuh
+  - Note: Juice Shop's logs and rules are added in 2.13 (decision 71)
 
 **Close-out**
 - [ ] **1.18** CloudTrail to S3, GuardDuty trial · C
@@ -167,7 +168,7 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
 
 Targets: own deployment only, never Google/Microsoft APIs. Each one follows attack → detection or miss → rule/fix → re-test.
 
-- [ ] **2.1** Outside: scan, then SQLi/XSS/brute force during a 443 window · M
+- [ ] **2.1** Outside: scan, then SQLi/XSS/brute force against Juice Shop during a 443 window from Marko's /32 only; Mailbridge is never exposed and its SQLi/XSS tests run from inside the VPN (decision 72) · M
 - [ ] **2.2** Inside: stolen VPN cert: reachability, visibility, time to revoke via CRL; include private hosts querying 10.0.0.2 directly (decision 30) · M
 - [ ] **2.3** Malicious email: HTML/JS payload, sanitising, CSP · M
 - [ ] **2.4** Access control: user A reading user B's mailbox by changing IDs · M
@@ -175,6 +176,28 @@ Targets: own deployment only, never Google/Microsoft APIs. Each one follows atta
   - Verify: each scenario has all four steps recorded
 - [ ] **2.6** Switch to production Let's Encrypt certs, only when Marko says so · M+C
   - Verify: `curl https://mail.<domain>` succeeds without `-k`
+
+**Juice Shop ground truth (decisions 67 to 76).** Built after 1.17 and 1.19; Wazuh must collect before anything is measured. Same layer loop: hand build → test → compare with code → rebuild from code → re-test. Flow logs stay S3-only.
+- [x] **2.7** Decisions 67 to 76 and the doc updates (ARCHITECTURE, TASKS, decisions, rationale, threat model) · C
+  - Verify: Marko reviews the PR; ARCHITECTURE §1–4, 6–8, 11, 12 and the repo layout describe the vuln subnet, host, routes, listener and logs
+- [ ] **2.8** Network: `vuln` subnet 10.0.6.0/24 with its own route table (`0.0.0.0/0`, `10.0.2.0/24`, `10.0.5.0/24 → fw ENI`), `10.0.6.0/24 → fw ENI` on the private table, `sg-juiceshop`, the vuln NACL, and the sg-proxy and dmz NACL additions; built by hand, then imported · M+C
+  - Verify: `terraform plan` after import shows no changes; `describe-route-tables` shows the routes; SG rules on these paths name IPs, not groups (decision 68)
+- [ ] **2.9** nftables on fw-ips: proxy → 10.0.6.10:3000 queued to Suricata, vuln egress limited to TCP 443, UDP 123 and siem 1514–1515, vuln → VPC dropped and logged, window DNAT to 10.0.2.10:8443 from Marko's /32; Suricata config for the routed path. Optional: limit vuln's 443 egress to AWS address ranges · **M**
+  - Verify: Claude reviews; `nft list ruleset`; from the juiceshop host, `nc` to 10.0.4.10:5432 and 10.0.3.10:3000 time out and fw-ips logs the drops; `eve.json` shows `http` events for Juice Shop and none for mail
+- [ ] **2.10** ECR repository `juice-shop` in `persistent` (decision 69); image mirrored by hand by digest; `modules/compute/juiceshop.tf` (t3.small, IMDSv2 hop 1, `credit_specification = "standard"`, `ssm-min` + pull on `juice-shop` only, `Role=juiceshop`, `juiceshop_enabled`); `juiceshop` role (Docker, pinned digest, container hardening, `DOCKER-USER` drop with logging, unroutable container DNS) · C
+  - Verify: IAM simulator allows pull on `juice-shop` and denies `mailbridge` and `/mailbridge/*`; from inside the container, db, app, IMDS and the internet all fail and the drops are logged; second run `changed=0`
+- [ ] **2.11** proxy: `juiceshop.<domain>` server block, its own certificate through `lego-renew@<name>`, decision 60 condition extended, the 8443 window listener; Unbound record on fw-ips · C
+  - Verify: staging certificate with only `juiceshop.<domain>` in its SANs; the simulator allows its TXT and still denies `vpn.<domain>`; SNI `mail.<domain>` on 8443 gets a handshake alert
+- [ ] **2.12** Per-server ModSecurity bundles (decision 71): `mail/` keeps decisions 63 to 66; `juiceshop/` with its own mode and paranoia level, JSON, form, multipart and XML bodies, `ABCFHZ` in `juiceshop-audit.log`; tested in the container harness first, including memory · C
+  - Verify: Juice Shop at DetectionOnly and mail at On: the same SQLi gets 200 and 403, and both logs record it; only Juice Shop's entries have `request.body`
+- [ ] **2.13** Wazuh: proxy agent reads both audit logs and JSON access logs; juiceshop agent reads `DOCKER-USER` drops; local rules 100100 to 100299 (ModSecurity match, block, DetectionOnly hit, brute force on 401s, IDOR enumeration, egress drop) · C
+  - Verify: each rule fires once on a test event and appears in the dashboard
+- [ ] **2.14** Attacker device certificate in the user pool (decision 73); `attacks/scope.conf` and the wrapper with rate caps (decision 75); separate browser profile for Juice Shop (decision 76) · M+C
+  - Verify: attacker profile gets 10.8.0.x; the wrapper refuses 10.0.0.2, a public IP and `mail.<domain>` in a Juice Shop run
+- [ ] **2.15** Matrix runs: {DetectionOnly, On} × paranoia level 1 to 4, each with GoTestWAF, the scripted challenges and the benign capture; Suricata rules on the decrypted path written by Marko · M
+  - Verify: `findings-report.md` has the matrix (block %, bypass %, false positives %) and one table per attack class
+- [ ] **2.16** Juice Shop window run (2.1) and its findings; window closed again · M
+  - Verify: during the window only Marko's IP reaches 443; after it, `terraform plan` shows the window rules and record removed
 
 **Tier 1 is done here.** Tier 2 starts only after this write-up.
 

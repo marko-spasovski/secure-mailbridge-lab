@@ -859,3 +859,123 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** A false positive on the admin's own request logs their session cookie. It expires, and Wazuh access is admin-only. No request bodies means a finding can't show the exact payload of a body attack, only the rule and its matched data in part H.
 
 **Verify once built.** `stat -c '%a %U' /var/log/modsecurity/audit.log` shows `600 root`. After the SQLi test, the newest entry has `messages` with 942100, no `body` in `request`, and `OWASP_CRS/4.25.0`. A normal 401 from the app adds no entry.
+
+## 67. Where Juice Shop runs (2026-11-04)
+
+**Problem.** Phase 2 needs ground truth: a target with known vulnerabilities, so every miss and every block can be attributed to a layer. OWASP Juice Shop has RCE, SSRF, XXE and file upload challenges by design, so whatever can reach it must be treated as compromised. Mailbridge holds OAuth tokens, its token encryption key and two DB passwords.
+
+**Options.** A: a second container on the app host. B: its own host in its own subnet, with its own route table, security group, NACL and IAM role. C: the app host, with a separate Docker network whose egress is locked by host firewall rules.
+
+**Chosen: B, with C's container lock added as a second layer.** In A, the container shares Mailbridge's kernel and Docker daemon, the app role that reads `/mailbridge/*`, the disk with `app.env`, and sg-app's egress to 5432. Container traffic is also NATed to 10.0.3.10, the one address `pg_hba` trusts. C fixes the container's egress, but the controls run on the host being attacked, so one escape removes them. In B, the host has nothing worth taking: `mailbridge-lab-ssm-min` plus pull from its own ECR repository (decision 69), no secrets, and a subnet that SG, NACL and nftables all refuse to db, app and mgmt. Inside the host, `DOCKER-USER` drops new connections from the container network, and the container's DNS server routes nowhere. Without that, DNS through AmazonProvidedDNS would be an exfiltration path that security groups can't filter (decision 30). Juice Shop runs with `--cap-drop ALL`, `no-new-privileges`, memory and pids limits and its image's non-root user, with IMDS hop limit 1.
+
+**Trade-off accepted.** One more host (t3.small, about $0.024/hour while enabled), subnet and role to maintain. The host itself keeps TCP 443 egress for SSM and ECR, which an escape could use; it's logged (`FW-EGRESS`) and accepted.
+
+**Verify once built.** From inside the container: `curl` to 10.0.4.10:5432, 10.0.3.10:3000, 169.254.169.254 and any internet address all fail, and `DOCKER-USER` logs the drops. From the host: the IAM simulator denies `ssm:GetParameter` on `/mailbridge/*` and ECR pull on `mailbridge`. `nc` from the host to 10.0.4.10:5432 times out and fw-ips logs the drop.
+
+## 68. East-west inspection through fw-ips (2026-11-04)
+
+**Problem.** TLS ends at Nginx, so Suricata on `tun0` sees only TLS metadata, never payloads. The proxy→Juice Shop hop is plain HTTP, but VPC traffic between subnets normally takes the `local` route and never crosses fw-ips.
+
+**Options.** A: more-specific VPC routes that send the hop through fw-ips. AWS allows a route more specific than `local` when its destination is a whole subnet CIDR. B: VPC Traffic Mirroring to a Suricata sensor. C: Suricata in IDS mode on proxy.
+
+**Chosen: A.** It's free, inline (Suricata can drop), and reuses the existing fail-closed NFQUEUE path. It also puts nftables between the target and everything else. The private route table gets `10.0.6.0/24 → fw ENI`, and the vuln table gets `0.0.0.0/0`, `10.0.2.0/24` and `10.0.5.0/24 → fw ENI`. The routes must be symmetric. The private table is shared with mgmt, so siem's replies to the Juice Shop agent go through fw-ips, and if the agent's requests went direct, fw-ips would see half a connection and drop it. AWS doesn't let security groups reference another group through a middlebox route, so the rules on these paths name addresses (10.0.2.10/32, 10.0.6.10/32, 10.0.5.10/32). Mailbridge's proxy→app path stays direct, so mail never reaches `eve.json`. B bills per mirror session hour. C adds Suricata's memory to a t3.micro already running two CRS bundles.
+
+**Trade-off accepted.** A wrong route blackholes traffic, so plans are checked line by line. If Suricata stops, Juice Shop is unreachable, which is the fail-closed design.
+
+**Verify once built.** `aws ec2 describe-route-tables` shows the routes. A request to `https://juiceshop.<domain>/rest/products/search?q=test` appears in `eve.json` as an `http` event with the URL. A request to `mail.<domain>` adds no `http` event. The Wazuh agent on juiceshop shows active.
+
+## 69. Where the Juice Shop image comes from (2026-11-04)
+
+**Problem.** The host needs the image, pinned and scanned, without a registry password and without opening the host to arbitrary internet registries.
+
+**Options.** A: a separate ECR repository `juice-shop`, filled by hand on the laptop, with a pull-only grant on that repository. B: pull from Docker Hub by digest on the host. C: put it in the existing `mailbridge` repository.
+
+**Chosen: A.** It's the same pattern as Mailbridge (decisions 5, 53, 57). The laptop pulls `bkimminich/juice-shop` by digest, checks it, and pushes it. ECR then scans it on push, and the tag can't be moved. The host role gets `ecr:GetAuthorizationToken`, which can't be scoped to a repository, plus `BatchGetImage`, `GetDownloadUrlForLayer` and `BatchCheckLayerAvailability` on the `juice-shop` repository ARN only. The host never contacts Docker Hub. B needs no IAM, but it would make the host depend on Docker Hub at run time. C would mean a grant that covers the Mailbridge image.
+
+**Trade-off accepted.** An update is a manual mirror and a digest change in a PR. Storage is a few hundred MB, so pennies a month beyond the free tier.
+
+**Verify once built.** `aws ecr describe-images --repository-name juice-shop` shows one digest with a scan result. `docker inspect` on the host shows that digest. The IAM simulator allows `ecr:BatchGetImage` on `juice-shop` and denies it on `mailbridge`.
+
+## 70. Juice Shop on the shared proxy, with its own certificate (2026-11-04)
+
+**Problem.** Juice Shop needs a name, TLS and the WAF in front of it. The only proxy today serves `mail.<domain>`.
+
+**Options.** A: a second server block on the shared proxy, with its own certificate. B: the same, with a SAN certificate covering both names. C: a second proxy host.
+
+**Chosen: A.** C doubles the proxy's cost and role for a lab whose only user is the admin. B would present `mail.<domain>` to anyone on the window listener. lego runs once per name from a templated `lego-renew@<name>` service, and decision 60's IAM condition adds `_acme-challenge.juiceshop.<domain>` and nothing else. Unbound adds `juiceshop.<domain> → 10.0.2.10`. Staging certificates only, as for mail.
+
+**Trade-off accepted.** Attacks on Juice Shop pass through the same Nginx and ModSecurity as mail. A proxy crash, ReDoS or RCE caused through Juice Shop affects Mailbridge too.
+
+**Verify once built.** `openssl s_client -servername juiceshop.<domain>` shows a staging certificate whose SAN list has only `juiceshop.<domain>`. The simulator allows the TXT `UPSERT` on `_acme-challenge.juiceshop.<domain>` and still denies `vpn.<domain>`. Both timers are listed.
+
+## 71. ModSecurity per server, and the measurement matrix (2026-11-04)
+
+**Problem.** The experiment needs Juice Shop's WAF mode and paranoia level changed many times, while Mailbridge keeps decisions 63 to 66. A rules file loaded once for all servers can't do that.
+
+**Options.** A: one bundle per server (engine settings, CRS settings, exclusions, and the CRS rules), each loaded by its own `modsecurity_rules_file`. B: one shared bundle, with per-server overrides through `modsecurity_rules`. C: one bundle, with the mode switched by request host in a rule.
+
+**Chosen: A.** Each bundle sets its own `SecRuleEngine` and `tx.blocking_paranoia_level`, so changing Juice Shop is one variable and a `--limit proxy` run. B and C depend on override order inside one rule set, which is easy to get wrong silently. Juice Shop's bundle allows JSON, form, multipart and XML bodies, because its challenges use them. That makes CRS 4.25.0's missing XML attribute fix (decision 63) live on that server, which is a measurement. Its audit log keeps request bodies (`ABCFHZ`) in `juiceshop-audit.log`, because the data is fake and the payload is the evidence. The matrix is {DetectionOnly, On} × paranoia level 1 to 4. Each run replays the same corpus: GoTestWAF, scripted Juice Shop challenges (the scoreboard confirms a bypass), and a benign browsing capture for false positives. In DetectionOnly, "would block" is read from the anomaly score in the audit log.
+
+**Trade-off accepted.** The CRS is loaded twice, which costs memory on a t3.micro, so it's measured in the container harness before AWS.
+
+**Verify once built.** With Juice Shop at DetectionOnly and mail at On, the same SQLi gets 403 on mail and 200 on Juice Shop, and both audit logs record it. `juiceshop-audit.log` entries contain `request.body`, and mail's don't.
+
+## 72. The Juice Shop test window (2026-11-04)
+
+**Problem.** Scenario 2.1 needs an outside view, but a public, deliberately vulnerable app gets found and exploited by internet bots within minutes. Mailbridge must never be reachable from outside.
+
+**Options.** A: DNAT internet 443 to a separate proxy listener (10.0.2.10:8443) that has only a handshake-refusing default server and the Juice Shop server, with the source limited to Marko's /32. B: DNAT to proxy's normal 443 listener and rely on SNI. C: no outside window for Juice Shop.
+
+**Chosen: A.** `mail.<domain>` has no server block on 8443, so asking for its name from outside gets a refused handshake. The separation is structural, not a rule that could be mistyped. The source is Marko's public /32 in sg-fw, the public NACL, the dmz NACL and sg-proxy. A public `juiceshop.<domain>` A record exists only during the window. Suricata gets the forwarded window traffic through nftables (written by Marko). B would leave mail one wrong `server_name` away from the internet. C loses the outside position.
+
+**Trade-off accepted.** §4's "0.0.0.0/0 — test windows only" becomes "Marko's /32", so the test is "from the internet" only in the sense of crossing it. Mailbridge's SQLi and XSS tests in 2.1 move inside the VPN.
+
+**Verify once built.** During a window from Marko's IP: `curl https://juiceshop.<domain>/` returns 200, and `openssl s_client -servername mail.<domain> -connect <eip>:443` gets a handshake alert. From any other IP, the port times out. After closing the window, `terraform plan` shows the rules and the record removed.
+
+## 73. A separate attacker identity (2026-11-04)
+
+**Problem.** If attacks come from the admin's VPN address, attack traffic and administration are mixed in every log, and the admin pool can reach more than a VPN user can.
+
+**Options.** A: a separate attacker device certificate in the user pool. B: the admin certificate. C: an attack box in AWS.
+
+**Chosen: A.** Logs attribute each attack to the attacker certificate's 10.8.0.x address, and the user pool reaches only proxy:443, like a real VPN user. B mixes the evidence. C costs money and needs its own egress.
+
+**Trade-off accepted.** One more certificate to issue on the offline CA and revoke after Phase 2.
+
+**Verify once built.** Connected with the attacker profile, the address is in 10.8.0.0/24. `nc -zv 10.0.5.10 443` times out. Attack requests in Nginx's log show that address.
+
+## 74. The `juiceshop_enabled` switch (2026-11-04)
+
+**Problem.** Most sessions don't attack Juice Shop, but the session routine (decision 41) brings up every host.
+
+**Options.** A: a separate `juiceshop_enabled` variable (default `false`), with the host created only when it and `hosts_enabled` are both true. B: always on with `hosts_enabled`. C: a separate root stack.
+
+**Chosen: A.** One variable, the same apply. Sessions without Juice Shop cost nothing extra and keep the routine unchanged. C duplicates the backend and providers for one host.
+
+**Trade-off accepted.** Plans differ depending on the variable, so the routine's expected counts must say which.
+
+**Verify once built.** `plan` with the default shows no juiceshop resources. `-var juiceshop_enabled=true` shows its instance. `-var hosts_enabled=false` removes it in either case.
+
+## 75. Tool scope and rate limits (2026-11-04)
+
+**Problem.** Tools like sqlmap, ffuf, Nuclei and hydra will attack whatever they're given, at whatever rate they're set to. AWS lets customers test their own EC2 without approval, but it prohibits DoS and "request flooding (login and API)", and C2 testing needs prior approval. CLAUDE.md limits attacks to own targets.
+
+**Options.** A: a committed scope file and a wrapper that refuses any target other than proxy 10.0.2.10 with SNI `juiceshop.<domain>` (or `mail.<domain>` for Mailbridge scenarios), with rate caps per tool. B: tool-level scope settings only. C: no tooling controls.
+
+**Chosen: A.** The wrapper resolves the target and checks the address and name before running anything. Caps: `ffuf -rate 20`, `nuclei -rl 20 -c 5 -ni` (no interactsh), `hydra -t 2` with a short list, sqlmap `--delay`, GoTestWAF with few workers and a send delay. ZAP and Burp get a context or scope set. There are no reverse shells or C2, which the egress design blocks anyway, no Burp Collaborator, and no load testing. B depends on remembering each tool's flags.
+
+**Trade-off accepted.** Slower scans and some challenges that can't be solved (out-of-band SSRF). That's recorded as a containment result, not a gap.
+
+**Verify once built.** The wrapper refuses `10.0.0.2`, `mail.<domain>` in a Juice Shop run, and any public address, exiting non-zero. Nginx's log shows request rates under the caps.
+
+## 76. A separate browser profile for Juice Shop (2026-11-04)
+
+**Problem.** Juice Shop's XSS challenges run attacker JavaScript in the tester's browser at `juiceshop.<domain>`, a sibling of `mail.<domain>`. For the browser they are the same site, so Mailbridge's `SameSite=Lax` session cookie is still sent on same-site requests. `__Host-` stops cookie tossing, and Mailbridge's same-origin check stops cross-origin POSTs, but neither is a reason to mix the two.
+
+**Options.** A: a separate browser profile for Juice Shop, never signed in to Mailbridge. B: a different registrable domain for Juice Shop. C: nothing.
+
+**Chosen: A.** It removes the cookie from the browser that runs the attacks, at no cost. B needs a second domain and zone. C leaves the admin's mail session one same-site request away from attacker scripts.
+
+**Trade-off accepted.** It's a procedure, not a technical control, so it's written into task 2.14 and the scope notes.
+
+**Verify once built.** In the Juice Shop profile, the browser's storage shows no cookie for `mail.<domain>`.
