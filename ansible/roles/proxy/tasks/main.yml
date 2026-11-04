@@ -1,6 +1,7 @@
 ---
-# Nginx with TLS from lego, task 1.15 part 1 (decisions 59, 60, 61). Runs
-# after the common role. ModSecurity and the rate limit follow in later parts.
+# Nginx with TLS from lego and ModSecurity with the CRS, task 1.15 parts 1
+# and 2 (decisions 58 to 66). Runs after the common role. The rate limit
+# follows in part 3.
 
 - name: Check that the lab domain is set
   ansible.builtin.assert:
@@ -183,6 +184,103 @@
     name: lego-renew.timer
     enabled: true
     state: started
+
+# --- ModSecurity and the CRS -----------------------------------------------
+
+# Engine and connector from Ubuntu (decision 58). The connector recommends
+# Ubuntu's modsecurity-crs 3.3.5; it is left out so the only CRS on the host
+# is the pinned one.
+- name: Install the ModSecurity engine and Nginx connector
+  ansible.builtin.apt:
+    name:
+      - libmodsecurity3t64
+      - libnginx-mod-http-modsecurity
+    state: present
+    install_recommends: false
+
+- name: Create the CRS download and install directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /var/cache/coreruleset
+    - /opt/coreruleset
+
+# Refused if the SHA-256 differs from the pinned value (decision 63).
+- name: Download the pinned CRS release
+  ansible.builtin.get_url:
+    url: https://github.com/coreruleset/coreruleset/releases/download/v{{ proxy_crs_version }}/coreruleset-{{ proxy_crs_version }}-minimal.tar.gz
+    dest: /var/cache/coreruleset/coreruleset-{{ proxy_crs_version }}-minimal.tar.gz
+    checksum: sha256:{{ proxy_crs_sha256 }}
+    owner: root
+    group: root
+    mode: "0644"
+
+# Versioned directory, like lego: an update unpacks next to the old one and
+# main.conf moves to it in the same run.
+- name: Unpack the CRS
+  ansible.builtin.unarchive:
+    src: /var/cache/coreruleset/coreruleset-{{ proxy_crs_version }}-minimal.tar.gz
+    dest: /opt/coreruleset
+    remote_src: true
+    owner: root
+    group: root
+    creates: "{{ proxy_crs_dir }}/rules/REQUEST-901-INITIALIZATION.conf"
+
+- name: Create the ModSecurity config directory
+  ansible.builtin.file:
+    path: /etc/nginx/modsec
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Write the ModSecurity and CRS settings
+  ansible.builtin.template:
+    src: modsec/{{ item }}.j2
+    dest: /etc/nginx/modsec/{{ item }}
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - modsecurity.conf
+    - crs-setup.conf
+    - exclusions-before.conf
+    - main.conf
+  notify: Reload Nginx
+
+# The audit log holds request headers, so session cookies of flagged
+# requests: root only (decision 66). Nginx's master opens it as root.
+- name: Create the audit log directory
+  ansible.builtin.file:
+    path: /var/log/modsecurity
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# libmodsecurity ignores SecAuditLogFileMode, so the file is made here.
+# Keeping its times leaves a second run unchanged.
+- name: Create the audit log, root only
+  ansible.builtin.file:
+    path: /var/log/modsecurity/audit.log
+    state: touch
+    owner: root
+    group: root
+    mode: "0600"
+    modification_time: preserve
+    access_time: preserve
+
+- name: Rotate the audit log
+  ansible.builtin.copy:
+    src: modsecurity.logrotate
+    dest: /etc/logrotate.d/modsecurity
+    owner: root
+    group: root
+    mode: "0644"
 
 # --- The site ----------------------------------------------------------------
 

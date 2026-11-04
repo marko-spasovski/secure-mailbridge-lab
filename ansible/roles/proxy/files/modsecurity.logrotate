@@ -1,0 +1,12 @@
+# ModSecurity's audit log (decision 66). copytruncate, because Nginx's
+# reopen signal (USR1) doesn't reach libmodsecurity's own file handle; the
+# file is opened with O_APPEND, so writes continue at the new end.
+/var/log/modsecurity/audit.log {
+    daily
+    rotate 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+}

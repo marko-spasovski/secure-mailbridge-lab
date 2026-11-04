@@ -16,3 +16,31 @@ proxy_acme_server: https://acme-staging-v02.api.letsencrypt.org/directory
 # Short while certificates are staging, so a mistake can't pin browsers to
 # this host for long; raised with production certificates (decision 61).
 proxy_hsts_max_age: 300
+
+# OWASP CRS, pinned like lego (decisions 58, 63). 4.25.0 is the newest
+# release Ubuntu 24.04's libmodsecurity 3.0.12 can load: 4.25.1 and later
+# need 3.0.16 (their CHANGES.md); the gap is in decision 63 and TASKS. To
+# update: download coreruleset-<version>-minimal.tar.gz and its .asc on the
+# laptop, check the signature with the CRS key
+#   36006F0E0BA167832158821138EEACA1AB8A6E72 (coreruleset.org/security.asc)
+#   gpg --verify coreruleset-<version>-minimal.tar.gz.asc
+# and only then copy the archive's SHA-256 here, in a PR.
+proxy_crs_version: 4.25.0
+proxy_crs_sha256: 409a0da1f4daed0719150fcee5173c351e08ffa33b5b2f8936f30968b3ad4ff0
+proxy_crs_dir: /opt/coreruleset/coreruleset-{{ proxy_crs_version }}
+
+# Blocking at paranoia level 1 with the CRS's default thresholds
+# (decisions 64, 65). Raising the level is a Phase 2 experiment.
+proxy_crs_paranoia_level: 1
+
+# The app uses PUT, PATCH and DELETE; the CRS allows only GET HEAD POST
+# OPTIONS by default (rule 911100).
+proxy_crs_allowed_methods: GET HEAD POST OPTIONS PUT PATCH DELETE
+
+# The app's API takes JSON only. No XML type, so the CRS's XML attribute
+# fix that 4.25.0 lacks has nothing to protect (decision 63).
+proxy_crs_allowed_content_types: "|application/json|"
+
+# The same limit as Nginx's client_max_body_size. Profile photos are JSON up
+# to 800 KB, so the no-files limit must be this high too (default 128 KB).
+proxy_modsec_body_limit: 1048576

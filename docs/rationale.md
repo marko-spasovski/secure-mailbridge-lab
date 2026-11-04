@@ -811,3 +811,51 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** If the app's HSTS policy changes, the lab won't follow it; that's intended, but it means the app's header is never what a browser sees behind this proxy. Each other security header the app sends (CSP and the rest) still passes through unchanged and needs the same check.
 
 **Verify once built.** From the VPN: `curl -sk -D - -o /dev/null https://mail.<domain>/healthz | grep -i strict-transport` prints exactly one line, `strict-transport-security: max-age=300`.
+
+## 63. Which CRS release, and the engine it needs (2026-11-04)
+
+**Problem.** Decision 58 put Ubuntu's ModSecurity engine under a pinned upstream CRS. The CRS 4.25 LTS line's changelog for 4.25.1 says: "Requires libmodsecurity v3.0.16 or later". Rule 901181 uses a `ctl` target with `@`, which older engines can't parse. Ubuntu 24.04 ships 3.0.12, 26.04 LTS ships 3.0.14 and Debian 13 ships 3.0.14. In a 24.04 container, CRS 4.25.2 stopped Nginx from loading ("Rules error ... REQUEST-901 ... Line 333").
+
+**Options.** A: CRS 4.25.0, the last release that loads on 3.0.12, with the missing fixes documented. B: the CRS project's `owasp/modsecurity-crs:nginx` image, pinned by digest, with a current engine and CRS. C: build libmodsecurity 3.0.17 and the connector as `.deb` packages in CI.
+
+**Chosen: A.** It keeps decision 58's split and was tested end to end on the real packages. It misses three groups of fixes. The XML attribute fix doesn't apply, because the CRS now accepts only `application/json` bodies (`tx.allowed_request_content_type`), so an XML body gets 403 from rule 920420 before any XML parsing matters. The ReDoS hardening (933160, 933161, 933180, 941140) is capped by `SecPcreMatchLimit 1000`, which stops runaway backtracking with an error that rule 200005 turns into a deny. The JSON-encoding bypass fix (4RI-250413), in the SQLi, RCE, LDAP and generic rules, is a real gap on a JSON API. It's accepted and becomes a Phase 2 measurement. B reverses decision 58's rejection: Docker on the DMZ host, and TLS, lego's reload and the logs crossing a container boundary, which means reworking PR 54. C means owning a C library's security patches.
+
+**Trade-off accepted.** A known, published fix is missing, and the pin is a dead end: every later 4.25.x needs 3.0.16. The move to B, or to an LTS engine ≥ 3.0.16, is a Tier 2 task.
+
+**Verify once built.** The audit log names `OWASP_CRS/4.25.0`. `nginx -t` passes. A `Content-Type: application/xml` body gets 403 with rule 920420. The role fails if the archive's SHA-256 differs. On the laptop, `gpg --verify` of the `.asc` shows a good signature from key `36006F0E0BA167832158821138EEACA1AB8A6E72`.
+
+## 64. Block, or only detect (2026-11-04)
+
+**Problem.** The CRS uses anomaly scoring. Each matching rule adds points by severity (critical 5, error 4, warning 3, notice 2), and REQUEST-949 blocks once the inbound total reaches the threshold. `SecRuleEngine` decides whether that block happens (`On`) or is only logged (`DetectionOnly`).
+
+**Options.** A: `On` from the first deploy, with the default thresholds (inbound 5, outbound 4). B: `DetectionOnly` for a tuning period, then `On`. C: `On` with higher thresholds to absorb false positives.
+
+**Chosen: A.** The only client is the admin, over the VPN. A false positive costs a 403 and an audit entry, and blocking surfaces it while building, as the profile photo did (rule 10010 and its exclusion). B is the standard rollout for a public site with unknown traffic. Here it would only delay the check that matters. C hides false positives instead of fixing them, and it weakens every rule at once.
+
+**Trade-off accepted.** A false positive breaks a feature until it's tuned. Each tuning step is a narrow, commented exclusion in `exclusions-before.conf`, not a threshold change.
+
+**Verify once built.** `?id=1' OR '1'='1` returns 403, and the audit log shows 942100 then 949110. Normal pages and `/healthz` return 200.
+
+## 65. Paranoia level (2026-11-04)
+
+**Problem.** CRS rules are grouped into paranoia levels 1 to 4. Each level adds stricter rules, so it detects more and produces more false positives.
+
+**Options.** A: PL1. B: PL2. C: PL1 blocking, with PL2 rules logged only (`tx.detection_paranoia_level=2`).
+
+**Chosen: A.** It's the default and the CRS's recommendation for most sites. Its false-positive rate fits a JSON API with free-text mail fields, and it's the baseline that bypass testing usually targets. B would need exclusions for compose and send straight away. C is the right next step once PL1 is quiet, and it's the Phase 2 experiment: the same attacks at PL1 and PL2, comparing detection.
+
+**Trade-off accepted.** PL1 misses some evasions that PL2 catches, and those show up as bypasses in Phase 2.
+
+**Verify once built.** `crs-setup.conf` sets `tx.blocking_paranoia_level=1`, and the audit log entries show only `paranoia-level/1` tags on matched rules.
+
+## 66. What the audit log keeps (2026-11-04)
+
+**Problem.** ModSecurity's audit log is made of parts: A (transaction), B (request headers, including cookies), C and I (request body), E (response body), F (response headers), H (matched rules), Z (end). It's sent to Wazuh in task 1.17, and libmodsecurity v3 can't mask individual fields. Upstream's recommended config logs `ABIJDEFHZ` for every 4xx and 5xx.
+
+**Options.** A: parts `ABFHZ`, only for flagged transactions and 5xx, response bodies not inspected. B: `AHZ`, no headers. C: upstream's default.
+
+**Chosen: A.** Rules and headers are what a finding needs: which rules matched, the request line, client, `User-Agent` and `Host`. Bodies are excluded, so mail text, drafts and OAuth codes never enter the log. `SecResponseBodyAccess Off` also keeps mail out of memory on a t3.micro. The RESPONSE-95x data-leak rules then have nothing to read, which is accepted. `SecAuditLogRelevantStatus "^5"` keeps server errors, because an attack that makes the app fail is a finding, and drops the app's normal 4xx answers, which would carry the admin's cookie. libmodsecurity 3.0.12 ignores `SecAuditLogFileMode`, so Ansible creates the file `0600` inside a `0700` directory. Logrotate uses `copytruncate`, because Nginx's reopen signal doesn't reach libmodsecurity's file handle. B loses the request line. C copies mail and tokens into the SIEM.
+
+**Trade-off accepted.** A false positive on the admin's own request logs their session cookie. It expires, and Wazuh access is admin-only. No request bodies means a finding can't show the exact payload of a body attack, only the rule and its matched data in part H.
+
+**Verify once built.** `stat -c '%a %U' /var/log/modsecurity/audit.log` shows `600 root`. After the SQLi test, the newest entry has `messages` with 942100, no `body` in `request`, and `OWASP_CRS/4.25.0`. A normal 401 from the app adds no entry.
