@@ -10,9 +10,9 @@ Added 2026-11-04, ahead of 0.7, because the target changes the trust boundaries.
 
 **Trust boundaries:**
 - The Juice Shop container is **untrusted by design**: assume RCE inside it. Boundary 1 is the container (capabilities dropped, non-root, `DOCKER-USER` drops new connections, unroutable DNS, IMDS hop limit 1).
-- The juiceshop host is **assumed compromisable** after an escape. Boundary 2 is the vuln subnet: its own route table, `sg-juiceshop`, the vuln NACL and nftables on fw-ips, which allow only proxy → 3000, TCP 443 and UDP 123 out (logged), and the Wazuh agent to siem. Its role can pull only the `juice-shop` image.
+- The vuln host is **assumed compromisable** after an escape. Boundary 2 is the vuln subnet: its own route table, `sg-vuln`, the vuln NACL and nftables on fw-ips, which allow only proxy → 3000, TCP 443 and UDP 123 out (logged), and the Wazuh agent to siem. Its role can pull only the `juice-shop` image.
 - proxy is **shared** (decision 70): Juice Shop's attacks reach the same Nginx and ModSecurity as mail. A proxy compromise exposes mail plaintext. Accepted.
-- The browser: `juiceshop.<domain>` and `mail.<domain>` are the same site. Boundary 3 is a separate browser profile (decision 76).
+- The browser: `vuln.<domain>` and `mail.<domain>` are the same site. Boundary 3 is a separate browser profile (decision 76).
 
 **Attacker positions:**
 - Inside, with the attacker certificate (user pool): reaches only proxy:443, so Juice Shop and Mailbridge by name.
