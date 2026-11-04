@@ -70,7 +70,7 @@ Deploy: Terraform (infra) + Ansible (config) · Teardown: `terraform destroy` wh
 | Name | Type | Disk (gp3, encrypted) | Role | Tier |
 |---|---|---|---|---|
 | fw-ips | t3.small | 20 GB | OpenVPN, nftables, NAT, Suricata, Unbound | 1 |
-| proxy | t3.micro | 10 GB | Nginx + ModSecurity v3 (engine and connector from Ubuntu, OWASP CRS 4 pinned by SHA-256, decision 58), lego (ACME client, decision 59) | 1 |
+| proxy | t3.micro | 10 GB | Nginx + ModSecurity v3 (engine and connector from Ubuntu, OWASP CRS 4.25.0 pinned by SHA-256, decisions 58, 63), lego (ACME client, decision 59) | 1 |
 | app | t3.small | 20 GB | Mailbridge in Docker | 1 |
 | db | t3.micro | 20 GB | PostgreSQL | 1 |
 | siem | t3.medium (t3.large if the indexer struggles) | 50 GB | Wazuh | 1 |
@@ -154,6 +154,7 @@ Baseline outbound: 110 TCP 443 to 0.0.0.0/0 · 120 UDP 123 to 0.0.0.0/0 · 130 U
 - Unbound on fw-ips (10.0.1.10): private record `mail.<domain> → 10.0.2.10`, forwards everything else to AmazonProvidedDNS (10.0.0.2). The name resolves only inside the VPN. Unbound serves VPN clients; private hosts keep AmazonProvidedDNS, which security groups and NACLs don't filter (known gap, tested in scenario 2.2). VPN DNS ends at fw-ips, so Suricata doesn't see it. Unbound doesn't validate DNSSEC, because AmazonProvidedDNS returns no signatures.
 - lego (one pinned static binary, verified by SHA-256, decision 59) obtains a Let's Encrypt cert via **DNS-01 challenge** using the proxy instance role — no public exposure and no stored API token. Nginx serves it; the role installs a systemd timer that runs `lego renew` and reloads Nginx after a renewal.
 - Nginx on proxy accepts TLS 1.3 only, sends HSTS (short `max-age` while on staging; Nginx is the only layer that sets it, and the app's own header is hidden, decision 62) and hides its version; no OCSP stapling, because Let's Encrypt no longer runs OCSP (decision 61).
+- ModSecurity on proxy blocks from the first deploy at CRS paranoia level 1 with the default anomaly thresholds (decisions 64, 65). CRS 4.25.0 is the newest release Ubuntu 24.04's engine (3.0.12) can load; only JSON request bodies are accepted (decision 63). Local rules run before the CRS in `exclusions-before.conf`: the profile photo field is checked against the exact data-URL shape the app accepts, and only then skipped by the attack rules. The audit log keeps parts `ABFHZ` (no bodies) for flagged transactions and 5xx, root only (decision 66).
 - **Staging certificates while building and rebuilding; switch to production certs once the setup is stable** (avoids Let's Encrypt rate limits).
 - DNS provider: **Route 53** public hosted zone in the `persistent` stack. `<domain>` is a subdomain of a domain Marko already owns, delegated by adding NS records for that subdomain at the parent's DNS provider. The parent domain stays where it is, and the real name stays out of this public repo.
 - Public records: `_acme-challenge.mail.<domain>` (TXT, lego) and `vpn.<domain>` (A, TTL 60, written by `lab`). `mail.<domain>` is never public.

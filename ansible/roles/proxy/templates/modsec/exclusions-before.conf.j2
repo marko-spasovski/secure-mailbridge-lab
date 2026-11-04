@@ -1,0 +1,52 @@
+# {{ ansible_managed }}
+# Local rules that run before the CRS (its REQUEST-900 slot). IDs 10000 to
+# 10999 are ours; the CRS keeps 1 to 99,999 free for local rules.
+
+# --- Profile photo (PUT /users/me/avatar) ------------------------------------
+# The photo is ~800 KB of base64 in a data URL, and random base64 trips CRS
+# attack rules by chance (932235, 934170, 941130 and others in testing).
+# Instead of turning rules off, the WAF enforces the exact shape the app
+# accepts (Mailbridge src/modules/users/avatar.ts) and then skips the attack
+# rules for that one field on that one route. Base64 can't carry an
+# injection; the app checks the decoded bytes. Every other field and route
+# is inspected as before.
+
+# 1. Anything else in that field is refused. ++ is possessive, so a
+#    mismatch fails without backtracking and stays under SecPcreMatchLimit.
+SecRule REQUEST_METHOD "@streq PUT" \
+    "id:10010,\
+    phase:2,\
+    deny,\
+    status:400,\
+    log,\
+    msg:'Profile photo is not a base64 PNG, JPEG or WebP data URL',\
+    tag:'local/avatar',\
+    chain"
+    SecRule REQUEST_FILENAME "@streq /users/me/avatar" "chain"
+        SecRule ARGS:json.image "!@rx ^data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]++={0,2}$" \
+            "t:none"
+
+# 2. The attack rules skip that field there. ctl sits in the last rule of
+#    the chain, so it runs only when both conditions match.
+SecRule REQUEST_METHOD "@streq PUT" \
+    "id:10011,\
+    phase:1,\
+    pass,\
+    nolog,\
+    tag:'local/avatar',\
+    chain"
+    SecRule REQUEST_FILENAME "@streq /users/me/avatar" \
+        "t:none,\
+        ctl:ruleRemoveTargetByTag=attack-rce;ARGS:json.image,\
+        ctl:ruleRemoveTargetByTag=attack-xss;ARGS:json.image,\
+        ctl:ruleRemoveTargetByTag=attack-sqli;ARGS:json.image,\
+        ctl:ruleRemoveTargetByTag=attack-ssrf;ARGS:json.image,\
+        ctl:ruleRemoveTargetByTag=attack-generic;ARGS:json.image,\
+        ctl:ruleRemoveTargetByTag=attack-injection-php;ARGS:json.image,\
+        ctl:ruleRemoveTargetByTag=attack-lfi;ARGS:json.image,\
+        ctl:ruleRemoveTargetByTag=attack-rfi;ARGS:json.image,\
+        ctl:ruleRemoveTargetByTag=attack-injection-generic;ARGS:json.image,\
+        ctl:ruleRemoveTargetByTag=attack-injection-java;ARGS:json.image,\
+        ctl:ruleRemoveTargetByTag=attack-ssti;ARGS:json.image,\
+        ctl:ruleRemoveTargetByTag=attack-fixation;ARGS:json.image,\
+        ctl:ruleRemoveTargetByTag=attack-protocol;ARGS:json.image"

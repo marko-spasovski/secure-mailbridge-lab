@@ -1,0 +1,70 @@
+# {{ ansible_managed }}
+# ModSecurity v3 engine settings (decisions 58, 64, 66). Based on upstream's
+# modsecurity.conf-recommended for 3.0.12; every difference is commented.
+
+# Blocking from day one (decision 64): the CRS decides by anomaly score.
+SecRuleEngine On
+
+# --- Request bodies ----------------------------------------------------------
+
+SecRequestBodyAccess On
+
+# The app's API is JSON (Mailbridge docs/deployment.md §3). Without the JSON
+# processor the CRS sees one opaque body instead of each field.
+SecRule REQUEST_HEADERS:Content-Type "^application/json" \
+    "id:200001,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=JSON"
+SecRule REQUEST_HEADERS:Content-Type "^(?:application(?:/soap\+|/)|text/)xml" \
+    "id:200000,phase:1,t:none,t:lowercase,pass,nolog,ctl:requestBodyProcessor=XML"
+
+# Matches Nginx's client_max_body_size. Upstream's no-files limit is 128 KB,
+# below the app's 800 KB JSON photos.
+SecRequestBodyLimit {{ proxy_modsec_body_limit }}
+SecRequestBodyNoFilesLimit {{ proxy_modsec_body_limit }}
+SecRequestBodyLimitAction Reject
+SecRequestBodyJsonDepthLimit 512
+SecArgumentsLimit 1000
+
+# A body ModSecurity can't fully parse is refused, so it can't hide an
+# attack from the rules.
+SecRule &ARGS "@ge 1000" \
+    "id:200007,phase:2,t:none,log,deny,status:400,msg:'Failed to fully parse request body due to large argument count',severity:2"
+SecRule REQBODY_ERROR "!@eq 0" \
+    "id:200002,phase:2,t:none,log,deny,status:400,msg:'Failed to parse request body.',logdata:'%{reqbody_error_msg}',severity:2"
+SecRule MULTIPART_STRICT_ERROR "!@eq 0" \
+    "id:200003,phase:2,t:none,log,deny,status:400,msg:'Multipart request body failed strict validation'"
+SecRule MULTIPART_UNMATCHED_BOUNDARY "@eq 1" \
+    "id:200004,phase:2,t:none,log,deny,msg:'Multipart parser detected a possible unmatched boundary.'"
+
+SecPcreMatchLimit 1000
+SecPcreMatchLimitRecursion 1000
+SecRule TX:/^MSC_/ "!@streq 0" \
+    "id:200005,phase:2,t:none,deny,msg:'ModSecurity internal error flagged: %{MATCHED_VAR_NAME}'"
+
+# --- Response bodies -----------------------------------------------------------
+
+# Off: responses are the user's mail. Inspecting them costs memory on a
+# t3.micro and would copy mail into logs; the CRS response rules then
+# have nothing to read, which is accepted (decision 66).
+SecResponseBodyAccess Off
+
+# --- Audit log (decision 66) ---------------------------------------------------
+
+# Only transactions a rule flagged, plus server errors: an attack that makes
+# the app fail is a finding. Upstream also logs every 4xx, which would log the
+# admin's normal 401s and 400s with their cookies.
+SecAuditEngine RelevantOnly
+SecAuditLogRelevantStatus "^5"
+
+# A: transaction header, B: request headers, F: response headers, H: the
+# matched rules, Z: end. No C/I/J (request body) and no E (response body):
+# no mail text, drafts or OAuth codes in the log.
+SecAuditLogParts ABFHZ
+SecAuditLogFormat JSON
+SecAuditLogType Serial
+SecAuditLog /var/log/modsecurity/audit.log
+# libmodsecurity 3.0.12 ignores SecAuditLogFileMode; Ansible creates the
+# file 0600 instead, inside a 0700 directory.
+
+SecArgumentSeparator &
+SecCookieFormat 0
+SecUnicodeMapFile /etc/nginx/unicode.mapping 20127

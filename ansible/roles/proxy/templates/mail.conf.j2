@@ -33,6 +33,11 @@ server {
     # The app accepts bodies up to 800 KB.
     client_max_body_size 1m;
 
+    # ModSecurity with the CRS (decisions 58, 63 to 66). Only here: the
+    # default server refuses the handshake, so it never sees HTTP.
+    modsecurity on;
+    modsecurity_rules_file /etc/nginx/modsec/main.conf;
+
     location / {
         proxy_pass http://{{ proxy_app_upstream }};
         proxy_http_version 1.1;

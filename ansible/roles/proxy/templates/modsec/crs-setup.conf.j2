@@ -1,0 +1,46 @@
+# {{ ansible_managed }}
+# CRS {{ proxy_crs_version }} settings. Everything not set here keeps the
+# defaults of crs-setup.conf.example, including the anomaly thresholds
+# (inbound 5, outbound 4) (decisions 63 to 65).
+
+# Matching rules add to the anomaly score and pass; REQUEST-949 blocks once
+# the score reaches the threshold.
+SecDefaultAction "phase:1,log,auditlog,pass"
+SecDefaultAction "phase:2,log,auditlog,pass"
+
+SecAction \
+    "id:900000,\
+    phase:1,\
+    pass,\
+    t:none,\
+    nolog,\
+    tag:'OWASP_CRS',\
+    setvar:tx.blocking_paranoia_level={{ proxy_crs_paranoia_level }}"
+
+SecAction \
+    "id:900200,\
+    phase:1,\
+    pass,\
+    t:none,\
+    nolog,\
+    tag:'OWASP_CRS',\
+    setvar:'tx.allowed_methods={{ proxy_crs_allowed_methods }}'"
+
+SecAction \
+    "id:900220,\
+    phase:1,\
+    pass,\
+    t:none,\
+    nolog,\
+    tag:'OWASP_CRS',\
+    setvar:'tx.allowed_request_content_type={{ proxy_crs_allowed_content_types }}'"
+
+# Required: REQUEST-901 refuses to run without it.
+SecAction \
+    "id:900990,\
+    phase:1,\
+    pass,\
+    t:none,\
+    nolog,\
+    tag:'OWASP_CRS',\
+    setvar:tx.crs_setup_version={{ proxy_crs_version | replace('.', '') }}"

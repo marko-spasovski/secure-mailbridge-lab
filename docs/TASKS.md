@@ -143,7 +143,8 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
 - [ ] **1.15** `proxy` role: Nginx, TLS, rate limit, ModSecurity v3 + CRS, lego with Route 53 DNS-01 (staging, decision 59) · C
   - Note: lego is pinned in `defaults` by version and SHA-256; at each version bump the release's build provenance is checked on the laptop with `gh attestation verify` before the hash is committed. The role writes `lego-renew.service` and `lego-renew.timer` (decision 59). IAM grant: decision 60; Ansible looks up the zone ID from the laptop at run time and writes it into lego's environment file
   - Note: TLS 1.3 only, `server_tokens off`, HSTS with a short `max-age` on staging, no OCSP stapling (decision 61); Nginx owns HSTS and hides the app's header (decision 62)
-  - Note: ModSecurity engine and Nginx connector from Ubuntu packages, CRS 4 from one pinned upstream release checked by SHA-256 (decision 58)
+  - Note: ModSecurity engine and Nginx connector from Ubuntu packages, CRS 4 from one pinned upstream release checked by SHA-256 (decision 58). CRS 4.25.0, because 4.25.1+ needs libmodsecurity ≥ 3.0.16; JSON bodies only (decision 63). Blocking, PL1, default thresholds (decisions 64, 65); audit log `ABFHZ`, flagged and 5xx only, root only (decision 66)
+  - Note: tested before AWS in an Ubuntu 24.04 container with the real packages, 2026-11-04: 848 rules load; clean GET 200; SQLi in query and JSON body 403; XSS 403; PUT/PATCH/DELETE 200; 800 KB photo 200; non-data-URL photo 400 (rule 10010); XML and form bodies 403 (920420); audit log `600 root`, no bodies
   - Verify: `curl -k https://mail.<domain>` over VPN returns 200; `?id=1' OR '1'='1` gets 403 and is in the audit log; `nc -zv -w 3 10.0.4.10 5432` from proxy times out (decision 48)
 
 **siem**
@@ -182,6 +183,7 @@ Targets: own deployment only, never Google/Microsoft APIs. Each one follows atta
 - [ ] **T2.1** `mon` host: Prometheus, Grafana, Alertmanager, exporters
 - [ ] **T2.2** App CI (§10): Jest, Playwright, k6, Trivy, SonarCloud, ZAP baseline
 - [ ] **T2.3** S3 gateway endpoint with a separate `data` route table; nightly `pg_dump` to S3, plus a tested and documented restore
+- [ ] **T2.4** ModSecurity engine ≥ 3.0.16 and the current CRS 4.25.x (the official CRS image pinned by digest, or an LTS engine once one ships 3.0.16), closing the 4.25.1 fixes 4.25.0 lacks, including the JSON bypass 4RI-250413 (decision 63)
 
 ## Tier 3 (gated)
 
