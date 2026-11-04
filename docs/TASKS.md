@@ -142,7 +142,7 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Verify: `docker inspect` shows the pinned digest; port 3000 reachable from proxy, unreachable from the VPN directly; `psql` to 10.0.4.10 as the app user connects (decision 48)
 - [ ] **1.15** `proxy` role: Nginx, TLS, rate limit, ModSecurity v3 + CRS, lego with Route 53 DNS-01 (staging, decision 59) · C
   - Note: lego is pinned in `defaults` by version and SHA-256; at each version bump the release's build provenance is checked on the laptop with `gh attestation verify` before the hash is committed. The role writes `lego-renew.service` and `lego-renew.timer` (decision 59). IAM grant: decision 60; Ansible looks up the zone ID from the laptop at run time and writes it into lego's environment file
-  - Note: TLS 1.3 only, `server_tokens off`, HSTS with a short `max-age` on staging, no OCSP stapling (decision 61)
+  - Note: TLS 1.3 only, `server_tokens off`, HSTS with a short `max-age` on staging, no OCSP stapling (decision 61); Nginx owns HSTS and hides the app's header (decision 62)
   - Note: ModSecurity engine and Nginx connector from Ubuntu packages, CRS 4 from one pinned upstream release checked by SHA-256 (decision 58)
   - Verify: `curl -k https://mail.<domain>` over VPN returns 200; `?id=1' OR '1'='1` gets 403 and is in the audit log; `nc -zv -w 3 10.0.4.10 5432` from proxy times out (decision 48)
 

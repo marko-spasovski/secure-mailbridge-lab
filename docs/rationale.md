@@ -799,3 +799,15 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** Any old client or tool without TLS 1.3 can't connect. Test tools in Phase 2 must support 1.3, which current curl, OpenSSL, nmap and ZAP do.
 
 **Verify once built.** From the VPN: `openssl s_client -connect 10.0.2.10:443 -servername mail.<domain> -tls1_2` fails with a handshake alert; with `-tls1_3` it succeeds, showing `TLSv1.3` and an ECDSA certificate. `curl -skI https://mail.<domain>` shows `Strict-Transport-Security` and a `Server: nginx` header with no version.
+
+## 62. Who sets HSTS (2026-11-04)
+
+**Problem.** The first request through proxy returned two `Strict-Transport-Security` headers: `max-age=31536000` from the app and `max-age=300` from Nginx. Nginx's `add_header` adds a header and never replaces one from the upstream. RFC 6797 §8.1 says a browser processes only the first HSTS header, which was the app's. So decision 61's short staging `max-age` wasn't in force: one certificate mistake could have pinned the admin's browser to HTTPS-only for a year, with no way to click through.
+
+**Options.** A: Nginx owns the header. `proxy_hide_header Strict-Transport-Security` drops the app's copy, and `add_header` sends ours. B: the app owns it. Remove the Nginx header and configure the app's HSTS to 300 s, in the Mailbridge repo. C: leave both.
+
+**Chosen: A.** HSTS is a promise about the TLS endpoint, and Nginx is that endpoint; the app speaks plain HTTP on port 3000 and can't know the edge's certificate state. The value stays one variable (`proxy_hsts_max_age`) in this repo, so moving to production certificates (2.6) is a one-line change. B ties the lab's edge policy to app code in another repo. C leaves decision 61 documented but untrue.
+
+**Trade-off accepted.** If the app's HSTS policy changes, the lab won't follow it; that's intended, but it means the app's header is never what a browser sees behind this proxy. Each other security header the app sends (CSP and the rest) still passes through unchanged and needs the same check.
+
+**Verify once built.** From the VPN: `curl -sk -D - -o /dev/null https://mail.<domain>/healthz | grep -i strict-transport` prints exactly one line, `strict-transport-security: max-age=300`.
