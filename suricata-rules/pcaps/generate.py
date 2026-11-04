@@ -54,10 +54,15 @@ def session(client_data, server_data, sport=40000):
 
 
 def client_hello(version, sni):
-    name = sni.encode()
-    server_name = struct.pack("!HBH", len(name) + 3, 0, len(name)) + name
-    extension = struct.pack("!HH", 0, len(server_name)) + server_name
-    extensions = struct.pack("!H", len(extension)) + extension
+    """sni=None sends no server_name extension, like openssl s_client
+    without -servername or curl to a bare IP address."""
+    if sni is None:
+        extensions = b""
+    else:
+        name = sni.encode()
+        server_name = struct.pack("!HBH", len(name) + 3, 0, len(name)) + name
+        extension = struct.pack("!HH", 0, len(server_name)) + server_name
+        extensions = struct.pack("!H", len(extension)) + extension
     body = (
         struct.pack("!H", version)
         + bytes(32)  # random
@@ -83,6 +88,12 @@ write_pcap("http.pcap", session(b"GET / HTTP/1.1\r\nHost: x\r\n\r\n", b"HTTP/1.1
 write_pcap("tls10.pcap", session(client_hello(TLS10, "mail.example.test"), server_hello(TLS10)))
 write_pcap("bad-sni.pcap", session(client_hello(TLS12, "other.example.test"), server_hello(TLS12)))
 write_pcap("clean-tls.pcap", session(client_hello(TLS12, "mail.example.test"), server_hello(TLS12)))
+# What Nginx really sends back for any non-TLS bytes on 443 (seen live on
+# 2026-11-04): an HTTP 400. That reply is why text garbage gets labelled http.
+NGINX_400 = b"HTTP/1.1 400 Bad Request\r\nServer: nginx\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+write_pcap("no-sni.pcap", session(client_hello(TLS12, None), server_hello(TLS12)))
+write_pcap("binary-nginx400.pcap", session(bytes(range(7, 71)), NGINX_400))
+write_pcap("text-nginx400.pcap", session(b"hello\n", NGINX_400))
 write_pcap(
     "flood.pcap",
     [tcp_packet(CLIENT, PROXY, 41000 + i, 443, 1000, 0, SYN) for i in range(70)],

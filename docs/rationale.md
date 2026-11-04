@@ -1003,3 +1003,39 @@ Public visibility raises the stakes on secrets. `gitleaks` runs in pre-commit an
 **Trade-off accepted.** Rate-limit lines are labelled `[error]` although nothing failed. The Wazuh rules in 1.17 match on `limiting requests`, not on the level.
 
 **Verify once built.** `curl -s -o /dev/null -w '%{http_code}'` on a limited request prints `429`. `grep 'limiting requests' /var/log/nginx/error.log` finds the client's VPN address.
+
+## 79. One alert per non-TLS flow, and keeping 1000001 (2026-11-04)
+
+**Problem.** Re-testing the 1.12 rules against real Nginx showed that Nginx answers any non-TLS bytes on 443 with an HTTP 400. Suricata's protocol detection looks at both directions, so that reply labels the flow `http`: text garbage (`hello`) gave only 1000005, and 64 random bytes gave both 1000001 and 1000005. 1000005, a protocol rule without a content match, also fired several times per flow.
+
+**Options.** A: keep both rules and make them share one flowbit, so whichever matches first is the only alert on that flow. B: retire 1000001 and keep 1000005. C: keep both unchanged.
+
+**Chosen: A.** Both rules test and set `mb.nontls`. Suricata orders rules that set a flowbit before rules that check it, so each flow gives one alert. In the Suricata 7.0.3 container replay, every capture gave exactly one. 1000001 is kept for streams that neither side makes recognisable. With Nginx in front, binary garbage usually ends as 1000005, because Nginx's reply labels the flow first, but a tunnel whose server answers differently, or doesn't answer, still reaches 1000001. B was the first recommendation, made before the binary test showed 1000001 does fire. C leaves duplicate alerts that would inflate Phase 2 counts. 1000005's message now says what it detects: "non-TLS or plain HTTP on proxy 443".
+
+**Trade-off accepted.** Which rule fires depends on how far detection got. For a finding, "non-TLS on 443" is the fact, and the sid only shows how it was recognised.
+
+**Verify once built.** From the VPN: `curl http://10.0.2.10:443/`, `printf 'hello\n' | nc`, and `head -c 64 /dev/urandom | nc` each add exactly one line to `fast.log`, for 1000005 or 1000001.
+
+## 80. TLS without a server name (2026-11-04)
+
+**Problem.** Rule 1000003 alerts on an SNI that doesn't start with `mail.`. A ClientHello without SNI has no `tls.sni` buffer, so `content:!` has nothing to test and the rule doesn't match. The re-test showed this: `openssl s_client -tls1` without `-servername` raised 1000002 but not 1000003.
+
+**Options.** A: a new alert rule for a ClientHello without SNI. Suricata 7.0.3 (Ubuntu 24.04) has no `absent` keyword, so a silent helper rule sets a flowbit when `tls.sni` has content, and the alert fires on `ssl_state:client_hello` from a flow without that flowbit. B: wait for a Suricata version with `absent`. C: accept the gap.
+
+**Chosen: A.** Every legitimate client sends SNI, because Nginx's default server refuses handshakes for unknown or missing names. The helper (1000007) uses `flowbits:noalert`, and the alert (1000006) sets its own flowbit, so it fires once per flow. B depends on a package Ubuntu doesn't ship. C leaves "connect to the IP address" as an unalerted way past 1000003.
+
+**Trade-off accepted.** Two rules for one idea, and one of them never alerts, which a reader must understand from the comment. It's alert-only until Phase 2 shows no false positives.
+
+**Verify once built.** `openssl s_client -connect 10.0.2.10:443 </dev/null` (no `-servername`) adds one 1000006 line. With `-servername mail.<domain>`, it adds none. In the container replay, `no-sni.pcap` gave one 1000006 and `clean-tls.pcap` gave nothing.
+
+## 81. Which rules drop (2026-11-04)
+
+**Problem.** Since 1.12, only 1000004 (the SYN flood) has dropped. The others were alert-only until they had been tested against real TLS, and fw-ips is inline and fails closed, so a `drop` with false positives breaks the site.
+
+**Options.** A: promote 1000002 (TLS 1.0) and 1000005 (non-TLS on 443), and keep 1000001, 1000003 and 1000006 as alerts. B: promote everything that fired correctly. C: keep alerts only until the Phase 2 baselines.
+
+**Chosen: A.** An IPS `drop` belongs on high-confidence rules that describe traffic with no legitimate use. 1000002 and 1000005 matched real traffic correctly with no false positive in the re-test or the replay, and Nginx refuses both anyway. The drop stops them one hop earlier and records them in Suricata. 1000001 depends on detection failing, which is a weaker signal. 1000003 must allow `vuln.<domain>` in 2.9 before it can block. 1000006 is new. B would block on those weaker or unfinished rules. C waits for evidence the re-test already provides for these two.
+
+**Trade-off accepted.** A browser or tool that only speaks TLS 1.0 gets a silent drop instead of Nginx's handshake alert. That's harder to diagnose, but it shows in `fast.log` as `[Drop]`.
+
+**Verify once built.** `fast.log` shows `[Drop]` for 1000002 and 1000005 after the Step T commands. `curl -sk https://mail.<domain>/healthz` still returns 200. In the container replay with `--simulate-ips`, `tls10`, `http`, `text-nginx400` and `binary-nginx400` were marked `[Drop]` and `clean-tls` gave nothing.
