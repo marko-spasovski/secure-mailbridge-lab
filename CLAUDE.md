@@ -7,7 +7,7 @@ measure detection, fix, and document findings.
 Full design: `docs/ARCHITECTURE.md` — it is the source of truth. If something conflicts with it, stop and ask.
 
 ## Current scope
-- Current tier: **Tier 1** (fw-ips, proxy, app, db, siem). Do not add Tier 2/3 components unless I ask.
+- Current tier: **Tier 1** (fw-ips, proxy, app, db, siem, mon, vuln). mon moved in from Tier 2 (decision 84); vuln is the Juice Shop target (decision 67). Do not add Tier 2/3 components unless I ask.
 - Phase: **AWS only.** There is no VPS phase. My VPS hosts a different app: never connect to it, deploy to it, or reference it in this repo.
 
 ## Stack
