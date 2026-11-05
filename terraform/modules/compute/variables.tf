@@ -118,9 +118,9 @@ variable "domain" {
 }
 
 variable "siem_instance_type" {
-  description = "siem instance type; t3.large is the documented fallback if the indexer struggles (decision 87)."
+  description = "siem instance type: t3.large since 2026-11-05, after the t3.medium ran out of CPU credits and memory headroom (decision 99)."
   type        = string
-  default     = "t3.medium"
+  default     = "t3.large"
 }
 
 variable "siem_subnet_id" {
