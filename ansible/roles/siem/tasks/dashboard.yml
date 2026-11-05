@@ -3,7 +3,7 @@
 # from the admin pool on 443 (ARCHITECTURE.md section 4, sg-siem).
 - name: Install the dashboard at the pinned version
   ansible.builtin.apt:
-    name: wazuh-dashboard={{ siem_wazuh_version }}
+    name: wazuh-dashboard={{ wazuh_version }}
     state: present
 
 - name: Hold the dashboard package

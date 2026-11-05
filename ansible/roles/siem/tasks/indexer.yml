@@ -4,7 +4,7 @@
 - name: Install the indexer at the pinned version
   ansible.builtin.apt:
     name:
-      - wazuh-indexer={{ siem_wazuh_version }}
+      - wazuh-indexer={{ wazuh_version }}
       - python3-bcrypt
     state: present
 

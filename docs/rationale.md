@@ -1271,3 +1271,15 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** Root on any agent host can read the password and enroll a fake agent from inside the VPC. In Tier 1 that's accepted, because root on a lab host is already a compromise the SIEM should show. A Phase 2 scenario can test exactly that: does a second agent enrolling from db raise an alert?
 
 **Verify.** `terraform plan` for `persistent` shows 1 to add and for `lab` 4 to add (one inline policy per agent host). The IAM simulator allows each agent role on the enrollment password and denies it every other `/siem/` value. After 1.17's role is built, authd on siem refuses an enrollment without the password (`Invalid password`), and the four agents show `active`.
+
+## 101. The Wazuh agent role (2026-11-05)
+
+**Problem.** Four hosts (fw-ips, db, app, proxy) need the same agent, connected to the same manager, each collecting its own logs. The agent enrolls the moment it starts, so it needs a running manager with authd. The package's installer also writes `localfile` entries for software it finds: on proxy it added Nginx's logs in Apache format, and on the other hosts it added nothing.
+
+**Options.** A: one shared `wazuh_agent` role in a final play, with shared pins in `group_vars/all` and each host's log list in `group_vars`. B: add the agent tasks to each host's role. C: Wazuh's Ansible collection.
+
+**Chosen: A.** The final play runs after siem's, so the manager and authd exist when the agents start. One role means one place to review the agent. `group_vars/all/wazuh.yml` holds `wazuh_version`, the key hash and the manager's address, used by both roles, so an agent can never be newer than its manager (Wazuh's compatibility rule). The agent hosts' apt preference admits only `wazuh-agent`, so a compromised or mistaken run on db can't pull in the manager or the indexer. The template is the package's generic `ossec.conf` (db's, which had nothing detected) with three changes: the manager address, an `<enrollment>` block (agent name `fw-ips`, `db`, `app` or `proxy`, and `etc/authd.pass`), and the host's `wazuh_agent_localfiles`. Collection is then an explicit, reviewed list per host, and it doesn't depend on what happened to be installed when the agent was. B would repeat the same tasks in four roles. C is a large generic collection, the same reason decision 86 gave for the manager.
+
+**Trade-off accepted.** Until 1.17 PR 2 fills in the lists, proxy collects less than the installer would have given it (no Nginx logs). PR 2 adds them back in the formats the decoders expect.
+
+**Verify.** All four agents show `active` in `agent_control -l` on siem, under their short names. `apt-cache policy wazuh-manager` on an agent host shows no candidate. Agents and manager both report version 4.14.9. A second run reports `changed=0`.

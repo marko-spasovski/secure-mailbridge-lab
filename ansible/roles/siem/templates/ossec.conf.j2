@@ -1,8 +1,8 @@
 <!-- Managed by Ansible (siem role). The package's ossec.conf, unchanged except:
      the indexer block points at the address in the indexer's certificate,
      vulnerability detection is off (decision 96: Tier 3, and its feed needs
-     about 14 GB at unpack), and authd (agent enrollment, 1515) is off until
-     1.17 sets its password. -->
+     about 14 GB at unpack), and authd (agent enrollment, 1515) requires the
+     password in etc/authd.pass, pulled from SSM (decision 100). -->
 <!--
   Wazuh - Manager - Default configuration for ubuntu 24.04
   More info at: https://documentation.wazuh.com
@@ -296,11 +296,11 @@
 
   <!-- Configuration for wazuh-authd -->
   <auth>
-    <disabled>yes</disabled>
+    <disabled>no</disabled>
     <port>1515</port>
     <use_source_ip>no</use_source_ip>
     <purge>yes</purge>
-    <use_password>no</use_password>
+    <use_password>yes</use_password>
     <ciphers>HIGH:!ADH:!EXP:!MD5:!RC4:!3DES:!CAMELLIA:@STRENGTH</ciphers>
     <!-- <ssl_agent_ca></ssl_agent_ca> -->
     <ssl_verify_host>no</ssl_verify_host>

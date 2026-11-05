@@ -40,6 +40,23 @@ users() {
     python3 -c 'import json, sys; print("\n".join(sorted(json.load(sys.stdin))))' 2>/dev/null || true
 }
 
+# After a start, password logins get 503 for about 15 s while the security
+# plugin loads its config from .opendistro_security (the admin certificate
+# works at once, so cluster health proves nothing). A login tested in that
+# gap fails although nothing is wrong. So wait until a login is answered
+# (401 for a wrong one), unless the security index doesn't exist: then the
+# volume is new and the code below initializes it. Up to 5 minutes.
+for _ in $(seq 100); do
+  code=$(printf 'user = "%s:%s"\n' probe probe |
+    curl -s -o /dev/null -w '%{http_code}' --cacert "$certs/root-ca.pem" \
+      -K - "$api/_plugins/_security/authinfo" || true)
+  [ "$code" = 401 ] && break
+  index=$(curl -s -o /dev/null -w '%{http_code}' -I --cacert "$certs/root-ca.pem" \
+    --cert "$certs/admin.pem" --key "$certs/admin-key.pem" "$api/.opendistro_security" || true)
+  [ "$index" = 404 ] && break
+  sleep 3
+done
+
 if login_ok admin "$admin_pw" && login_ok kibanaserver "$kibana_pw" &&
   [ "$(users)" = "$(printf 'admin\nkibanaserver')" ]; then
   echo unchanged
