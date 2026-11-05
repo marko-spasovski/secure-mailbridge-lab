@@ -1233,3 +1233,17 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** Until 1.17, nothing can enroll, which is intended. The stale-process fault was cleared by hand, and the new order is proven only on the next fresh siem.
 
 **Verify.** `ss -ltn` shows 1514 on all interfaces, 55000 on 127.0.0.1, and no 1515. On a fresh siem the first run needs no hand fix, and `pgrep -fc wazuh_apid.py` matches the API's normal pool (5 processes). `systemctl is-active filebeat` shows `active` on the first run.
+
+## 98. The Wazuh dashboard (2026-11-05)
+
+**Problem.** The dashboard (OpenSearch Dashboards with the Wazuh plugin) is the only Wazuh component a person uses. The package listens on `0.0.0.0:443` and accepts TLS 1.2. It reaches the indexer at `localhost:9200`, which no longer exists after decision 93. It checks only the indexer certificate's chain, and it ships with the default `kibanaserver` password in its keystore. The plugin creates `wazuh.yml` with the API user `wazuh-wui` and its default password.
+
+**Options.** A: bind 10.0.5.10, TLS 1.3 only, `verificationMode: full`, and a helper that sets both credentials before the first start. B: keep the package's network and TLS settings and change only the passwords. C: put the dashboard behind Nginx on proxy.
+
+**Chosen: A.** It's the same edge policy as proxy and the VPN (decision 61): only the admin's browsers connect, over the VPN, so TLS 1.2 adds attack surface for no client. `full` verification is free, because the indexer's certificate names 10.0.5.10 (decision 90). The helper follows decisions 94 and 95. `kibanaserver` goes into the keystore on stdin, checked against a root-only SHA-256 because the keystore can't be read back. It runs before the first start, so the dashboard never logs in with the shipped password. The plugin reads the API password only from `wazuh.yml`, in plain text. The helper writes that file `0600`, owned by `wazuh-dashboard`, and the API it unlocks listens on loopback only (decision 97). C would put SIEM traffic through the DMZ host that the Juice Shop attacks target, and add a hop to the one tool used to watch them.
+
+**Trade-off accepted.** The `wazuh-wui` password is on disk in plain text, readable by the dashboard user and root. The dashboard's login uses the indexer's `admin` user, so the person at the dashboard has full indexer rights. A read-mostly analyst user is a Tier 2 item.
+
+**Mistake caught while building.** The helper's first version made the config directory with `install -d`, which also created the missing parent `data/wazuh` owned by root. The dashboard then couldn't create `data/wazuh/downloads` and restarted 17 times (`EACCES`). Each level is now created as `wazuh-dashboard`.
+
+**Verify.** From the admin pool, `curl --cacert root-ca.pem https://10.0.5.10/` returns 302 to `/app/login`, and `openssl s_client` reports `Verify return code: 0`. `-tls1_2` gets `alert protocol version`. A login as `admin` with the SSM password gets 200, and `admin:admin` gets 401. The plugin's `/api/check-stored-api` returns 200 as `wazuh-wui`. `set-dashboard-credentials check` prints `unchanged`. `ss -ltn` shows 443 on 10.0.5.10 only.

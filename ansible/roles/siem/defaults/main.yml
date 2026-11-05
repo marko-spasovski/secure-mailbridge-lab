@@ -50,3 +50,9 @@ siem_filebeat_certs:
   - { param: root-ca-cert, file: root-ca.pem }
   - { param: server-cert, file: filebeat.pem }
   - { param: server-key, file: filebeat-key.pem }
+
+# The dashboard's certificates (decision 90), named as its settings expect.
+siem_dashboard_certs:
+  - { param: root-ca-cert, file: root-ca.pem }
+  - { param: dashboard-cert, file: dashboard.pem }
+  - { param: dashboard-key, file: dashboard-key.pem }

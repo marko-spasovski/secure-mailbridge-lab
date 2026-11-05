@@ -1,0 +1,89 @@
+---
+# The Wazuh dashboard (OpenSearch Dashboards with the Wazuh plugin), reached
+# from the admin pool on 443 (ARCHITECTURE.md section 4, sg-siem).
+- name: Install the dashboard at the pinned version
+  ansible.builtin.apt:
+    name: wazuh-dashboard={{ siem_wazuh_version }}
+    state: present
+
+- name: Hold the dashboard package
+  ansible.builtin.dpkg_selections:
+    name: wazuh-dashboard
+    selection: hold
+
+- name: Install the dashboard settings
+  ansible.builtin.template:
+    src: opensearch_dashboards.yml.j2
+    dest: /etc/wazuh-dashboard/opensearch_dashboards.yml
+    owner: wazuh-dashboard
+    group: wazuh-dashboard
+    mode: "0640"
+  notify: Restart the Wazuh dashboard
+
+- name: Create the dashboard's certificate directory
+  ansible.builtin.file:
+    path: /etc/wazuh-dashboard/certs
+    state: directory
+    owner: wazuh-dashboard
+    group: wazuh-dashboard
+    mode: "0500"
+
+# The browser-facing certificate and the CA it uses to verify the indexer
+# (decision 90).
+- name: Pull the dashboard's certificates from SSM
+  ansible.builtin.command: >-
+    /usr/local/sbin/fetch-ssm-param /siem/certs/{{ item.param }}
+    /etc/wazuh-dashboard/certs/{{ item.file }} 0400
+    {{ 'check' if ansible_check_mode else '' }}
+  loop: "{{ siem_dashboard_certs }}"
+  loop_control:
+    label: "{{ item.file }}"
+  register: siem_dashboard_cert_pull
+  changed_when: siem_dashboard_cert_pull.stdout == 'changed'
+  check_mode: false
+  notify: Restart the Wazuh dashboard
+
+- name: Hand the certificates to the dashboard
+  ansible.builtin.file:
+    path: /etc/wazuh-dashboard/certs/{{ item.file }}
+    owner: wazuh-dashboard
+    group: wazuh-dashboard
+    mode: "0400"
+  loop: "{{ siem_dashboard_certs }}"
+  loop_control:
+    label: "{{ item.file }}"
+
+- name: Install the dashboard credentials helper
+  ansible.builtin.copy:
+    src: set-dashboard-credentials
+    dest: /usr/local/sbin/set-dashboard-credentials
+    owner: root
+    group: root
+    mode: "0755"
+  check_mode: false
+
+# Before the first start, so the dashboard never logs in with the shipped
+# kibanaserver default (decision 98).
+- name: Set the dashboard's credentials
+  ansible.builtin.command: >-
+    /usr/local/sbin/set-dashboard-credentials {{ 'check' if ansible_check_mode else '' }}
+  register: siem_dashboard_credentials
+  changed_when: siem_dashboard_credentials.stdout == 'changed'
+  check_mode: false
+  notify: Restart the Wazuh dashboard
+
+- name: Apply dashboard settings
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start the dashboard
+  ansible.builtin.systemd_service:
+    name: wazuh-dashboard
+    enabled: true
+    state: started
+
+# Node takes a while on a t3 with few credits.
+- name: Wait for the dashboard
+  ansible.builtin.wait_for:
+    host: "{{ siem_private_ip }}"
+    port: 443
+    timeout: 600

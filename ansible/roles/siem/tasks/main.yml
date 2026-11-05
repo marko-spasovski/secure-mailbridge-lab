@@ -14,3 +14,6 @@
 
 - name: Install and configure the manager and Filebeat
   ansible.builtin.import_tasks: manager.yml
+
+- name: Install and configure the dashboard
+  ansible.builtin.import_tasks: dashboard.yml
