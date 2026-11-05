@@ -14,8 +14,9 @@ siem_wazuh_version: 4.14.9-1
 # still shows that fingerprint, and only then copy its SHA-256 here, in a PR.
 siem_wazuh_gpg_sha256: a378ca8dfa6b72122df288f64a0cde54f1cbfa3db9b43e6865cb73def35b5b17
 
-# Indexer heap, Xms = Xmx (decision 87). 1.5 GB of the t3.medium's 4 GB.
-siem_indexer_heap: 1536m
+# Indexer heap, Xms = Xmx (decisions 87, 99). 3 GB of the t3.large's 8 GB:
+# OpenSearch wants at most half, and Lucene uses the rest as page cache.
+siem_indexer_heap: 3g
 
 # The persistent data volume (decision 88), found by its Name tag from the
 # laptop, and mounted where the package keeps its data.

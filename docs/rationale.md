@@ -1247,3 +1247,15 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Mistake caught while building.** The helper's first version made the config directory with `install -d`, which also created the missing parent `data/wazuh` owned by root. The dashboard then couldn't create `data/wazuh/downloads` and restarted 17 times (`EACCES`). Each level is now created as `wazuh-dashboard`.
 
 **Verify.** From the admin pool, `curl --cacert root-ca.pem https://10.0.5.10/` returns 302 to `/app/login`, and `openssl s_client` reports `Verify return code: 0`. `-tls1_2` gets `alert protocol version`. A login as `admin` with the SSM password gets 200, and `admin:admin` gets 401. The plugin's `/api/check-stored-api` returns 200 as `wazuh-wui`. `set-dashboard-credentials check` prints `unchanged`. `ss -ltn` shows 443 on 10.0.5.10 only.
+
+## 99. siem on a t3.large (2026-11-05)
+
+**Problem.** Decision 87 started siem as a t3.medium (2 vCPU, 4 GB) with a 1.5 GB heap, and named the t3.large as the fallback "if the indexer struggles". After 1.16 was built, it was measured. The CPU credit balance stayed at 2.6–8 for the whole session, with average use up to 38 %. A `standard` t3 with no credits is held at its baseline, 20 % for a t3.medium, which is why every siem run was slow. 819 MB of 3.8 GB was available, with the indexer's Java at 1.97 GB and no agents connected yet. There's no swap. If memory runs out, the kernel kills the largest process, which is the indexer.
+
+**Options.** A: t3.large (2 vCPU, 8 GB, 30 % baseline, 36 credits an hour) with a 3 GB heap. B: stay on the t3.medium until 1.17 shows a failure. C: `unlimited` credits on the t3.medium.
+
+**Chosen: A.** 1.17 adds five agents and the §8 log sources. The Juice Shop block then pushes Suricata's `eve.json` and the ModSecurity audit log at attack rate. Those are the moments the SIEM exists for, and the worst time to lose the indexer. 8 GB is Wazuh's own all-in-one recommendation. A 3 GB heap stays under OpenSearch's "at most half of RAM" rule and leaves about 5 GB for Lucene's page cache, the manager and the dashboard. B waits for a failure during exactly the measurement the lab is for. C breaks the cost guardrail in CLAUDE.md (`standard` credits), and its cost has no upper limit.
+
+**Trade-off accepted.** About $0.048 an hour more, roughly $0.19 for a four-hour session. A new instance still starts with no credits, so its first install is still slow (decision 87).
+
+**Verify.** `terraform plan` shows siem updated in place, `instance_type` t3.medium → t3.large, nothing replaced. After the apply siem keeps its private IP and the data volume stays attached, and all three Wazuh services come back by themselves. `_cat/nodes?h=heap.max` shows `3gb`, and the cluster is green. `free -m` shows about 8 GB total.
