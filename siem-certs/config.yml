@@ -1,0 +1,16 @@
+---
+# Input for wazuh-certs-tool.sh 4.14 (task 1.16, decisions 89 and 90).
+# siem is an all-in-one host, so all three nodes share 10.0.5.10, which goes
+# into each certificate's subjectAltName. Wazuh's default node names are kept
+# so the siem role matches the step-by-step install guide line for line.
+# How to run the tool and store the output: siem-certs/README.md
+nodes:
+  indexer:
+    - name: node-1
+      ip: "10.0.5.10"
+  server:
+    - name: wazuh-1
+      ip: "10.0.5.10"
+  dashboard:
+    - name: dashboard
+      ip: "10.0.5.10"
