@@ -8,3 +8,13 @@
     name: wazuh-indexer
     state: restarted
     daemon_reload: true
+
+- name: Restart the Wazuh manager
+  ansible.builtin.systemd_service:
+    name: wazuh-manager
+    state: restarted
+
+- name: Restart Filebeat
+  ansible.builtin.systemd_service:
+    name: filebeat
+    state: restarted

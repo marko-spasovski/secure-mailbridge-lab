@@ -31,3 +31,22 @@ siem_indexer_certs:
   - { param: indexer-key, file: indexer-key.pem }
   - { param: admin-cert, file: admin.pem }
   - { param: admin-key, file: admin-key.pem }
+
+# Filebeat OSS from Wazuh's repository: the build Wazuh 4.x ships, newest
+# rebuild of 7.10.2 (decision 85).
+siem_filebeat_version: 7.10.2-2
+
+# Filebeat's index template and Wazuh module, pinned by SHA-256 like lego
+# (decision 86). The template comes from the release tag that matches the
+# manager; to update, download both on the laptop and copy the hashes here.
+siem_wazuh_template_url: https://raw.githubusercontent.com/wazuh/wazuh/v4.14.9/extensions/elasticsearch/7.x/wazuh-template.json
+siem_wazuh_template_sha256: b2d182f49cc68957849e77fd2d79528fd2273ebaec1106c9661c9e320577a089
+siem_filebeat_module_url: https://packages.wazuh.com/4.x/filebeat/wazuh-filebeat-0.5.tar.gz
+siem_filebeat_module_sha256: 7a8c67c47b22f89ab271b7e35f108f18b2215b7aa411cdd23c9994393070d38d
+
+# Filebeat's certificates: the server (wazuh-1) pair, under the names its
+# filebeat.yml and the manager's <indexer> block expect (decision 90).
+siem_filebeat_certs:
+  - { param: root-ca-cert, file: root-ca.pem }
+  - { param: server-cert, file: filebeat.pem }
+  - { param: server-key, file: filebeat-key.pem }
