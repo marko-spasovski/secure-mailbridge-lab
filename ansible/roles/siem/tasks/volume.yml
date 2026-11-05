@@ -46,33 +46,13 @@
   when: siem_data_probe.rc == 2
   changed_when: true
 
-- name: Mount the volume at boot
-  ansible.builtin.lineinfile:
-    path: /etc/fstab
-    regexp: '^LABEL={{ siem_data_label }}\s'
-    line: "LABEL={{ siem_data_label }} {{ siem_indexer_data_dir }} ext4 defaults,noatime,nofail 0 2"
-    owner: root
-    group: root
-    mode: "0644"
-
-- name: Check whether the volume is mounted
-  ansible.builtin.command: findmnt --mountpoint {{ siem_indexer_data_dir }}
-  register: siem_data_mounted
-  changed_when: false
-  failed_when: false
-  check_mode: false
-
-- name: Create the mount point
-  ansible.builtin.file:
+# Writes the fstab line and mounts it now; by label, which mkfs set above.
+# nofail: a missing volume stops the indexer (decision 92), not the boot.
+- name: Mount the volume
+  ansible.posix.mount:
     path: "{{ siem_indexer_data_dir }}"
-    state: directory
-    owner: root
-    group: root
-    mode: "0755"
-  when: siem_data_mounted.rc != 0
-
-# daemon-reload first: systemd builds mount units from fstab.
-- name: Mount the volume now
-  ansible.builtin.shell: systemctl daemon-reload && mount {{ siem_indexer_data_dir }}
-  when: siem_data_mounted.rc != 0
-  changed_when: true
+    src: LABEL={{ siem_data_label }}
+    fstype: ext4
+    opts: defaults,noatime,nofail
+    passno: "2"
+    state: mounted

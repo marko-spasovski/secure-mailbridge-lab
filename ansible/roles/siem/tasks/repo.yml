@@ -25,9 +25,8 @@
     owner: root
     group: root
     mode: "0644"
-  register: siem_repo
+  notify: Refresh the package lists
 
-- name: Refresh the package lists
-  ansible.builtin.apt:
-    update_cache: true
-  when: siem_repo.changed
+# The install below needs the Wazuh index now, not at the end of the play.
+- name: Refresh the package lists for the new repository
+  ansible.builtin.meta: flush_handlers
