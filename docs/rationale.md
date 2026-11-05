@@ -1259,3 +1259,15 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** About $0.048 an hour more, roughly $0.19 for a four-hour session. A new instance still starts with no credits, so its first install is still slow (decision 87).
 
 **Verify.** `terraform plan` shows siem updated in place, `instance_type` t3.medium → t3.large, nothing replaced. After the apply siem keeps its private IP and the data volume stays attached, and all three Wazuh services come back by themselves. `_cat/nodes?h=heap.max` shows `3gb`, and the cluster is green. `free -m` shows about 8 GB total.
+
+## 100. How Wazuh agents enroll (2026-11-05)
+
+**Problem.** A Wazuh agent talks to the manager in two steps. First it **enrolls** with authd on TCP 1515, over TLS, and receives its own key. From then on it sends events on TCP 1514, encrypted with that key. Anything that can enroll can send the SIEM events under any name it chooses: it can flood it, impersonate a host, or bury a real attack in noise. The package's authd accepts anyone who reaches 1515, so decision 97 turned it off until this decision.
+
+**Options.** A: authd with a password from SSM; siem reads it, and each agent host reads that one parameter with its own instance role. B: A plus agent certificates signed by the Wazuh CA (authd's `ssl_agent_ca`), so enrollment also needs a valid client certificate. C: no authd; Ansible registers each agent through the API and writes the agent's `client.keys`.
+
+**Chosen: A.** It's the lab's secret pattern. `persistent` generates the value write-only (decision 46), and hosts pull their own secrets with their instance roles (decisions 39, 47), so the value never passes through the laptop, Ansible's output or Terraform state. Each agent host's grant names one ARN. The IAM simulator should show `/siem/agent-enrollment-password` allowed and `/siem/indexer-admin-password` denied for fw-ips, db, app and proxy. The network already narrows who can reach 1515: sg-siem and the mgmt NACL accept it only from the VPC (§4). B is stronger, because a leaked password alone wouldn't be enough, but it adds a certificate per host to make, store and rotate. That belongs to Tier 2 hardening. C moves every agent key through the laptop and Ansible, which the lab avoids everywhere else.
+
+**Trade-off accepted.** Root on any agent host can read the password and enroll a fake agent from inside the VPC. In Tier 1 that's accepted, because root on a lab host is already a compromise the SIEM should show. A Phase 2 scenario can test exactly that: does a second agent enrolling from db raise an alert?
+
+**Verify.** `terraform plan` for `persistent` shows 1 to add and for `lab` 4 to add (one inline policy per agent host). The IAM simulator allows each agent role on the enrollment password and denies it every other `/siem/` value. After 1.17's role is built, authd on siem refuses an enrollment without the password (`Invalid password`), and the four agents show `active`.
