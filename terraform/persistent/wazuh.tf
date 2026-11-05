@@ -93,3 +93,19 @@ resource "aws_ssm_parameter" "wazuh_api_wazuh_wui" {
   value_wo         = ephemeral.random_password.wazuh_api_wazuh_wui.result
   value_wo_version = 1
 }
+
+# The agents' enrollment password (task 1.17, decision 100). siem's authd
+# requires it, and each agent host may read this one parameter to enroll.
+ephemeral "random_password" "wazuh_agent_enrollment" {
+  length  = 40
+  special = false
+}
+
+resource "aws_ssm_parameter" "wazuh_agent_enrollment" {
+  #checkov:skip=CKV_AWS_337:The AWS-managed aws/ssm key, as for /mailbridge/db-password.
+  name             = "/siem/agent-enrollment-password"
+  description      = "Wazuh authd enrollment password, read by siem and the agent hosts"
+  type             = "SecureString"
+  value_wo         = ephemeral.random_password.wazuh_agent_enrollment.result
+  value_wo_version = 1
+}
