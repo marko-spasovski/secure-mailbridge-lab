@@ -1,0 +1,4 @@
+# Managed by Ansible (siem role, decision 87). Read after jvm.options, so
+# these replace the package's 1 GB. Xms = Xmx: the heap never resizes.
+-Xms{{ siem_indexer_heap }}
+-Xmx{{ siem_indexer_heap }}

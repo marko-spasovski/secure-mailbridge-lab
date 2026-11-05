@@ -1,0 +1,128 @@
+---
+# The Wazuh indexer (OpenSearch with the security plugin), task 1.16.
+# python3-bcrypt hashes the internal users' passwords (set-indexer-users).
+- name: Install the indexer at the pinned version
+  ansible.builtin.apt:
+    name:
+      - wazuh-indexer={{ siem_wazuh_version }}
+      - python3-bcrypt
+    state: present
+
+# A hold keeps apt from moving it; a version bump is a PR (decision 85).
+- name: Hold the indexer package
+  ansible.builtin.dpkg_selections:
+    name: wazuh-indexer
+    selection: hold
+
+# The package created the user; the volume's root becomes its data dir.
+- name: Own the data directory
+  ansible.builtin.file:
+    path: "{{ siem_indexer_data_dir }}"
+    state: directory
+    owner: wazuh-indexer
+    group: wazuh-indexer
+    mode: "0750"
+
+- name: Create the indexer's drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/wazuh-indexer.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Tie the indexer to the data volume
+  ansible.builtin.copy:
+    src: indexer-data-volume.conf
+    dest: /etc/systemd/system/wazuh-indexer.service.d/data-volume.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart the Wazuh indexer
+
+- name: Install the indexer settings
+  ansible.builtin.template:
+    src: opensearch.yml.j2
+    dest: /etc/wazuh-indexer/opensearch.yml
+    owner: wazuh-indexer
+    group: wazuh-indexer
+    mode: "0660"
+  notify: Restart the Wazuh indexer
+
+- name: Set the indexer heap
+  ansible.builtin.template:
+    src: heap.options.j2
+    dest: /etc/wazuh-indexer/jvm.options.d/heap.options
+    owner: wazuh-indexer
+    group: wazuh-indexer
+    mode: "0660"
+  notify: Restart the Wazuh indexer
+
+- name: Create the indexer's certificate directory
+  ansible.builtin.file:
+    path: /etc/wazuh-indexer/certs
+    state: directory
+    owner: wazuh-indexer
+    group: wazuh-indexer
+    mode: "0500"
+
+# siem pulls its own certificates with its instance role (decisions 39, 90);
+# file names are the ones opensearch.yml expects.
+- name: Pull the indexer's certificates from SSM
+  ansible.builtin.command: >-
+    /usr/local/sbin/fetch-ssm-param /siem/certs/{{ item.param }}
+    /etc/wazuh-indexer/certs/{{ item.file }} 0400
+    {{ 'check' if ansible_check_mode else '' }}
+  loop: "{{ siem_indexer_certs }}"
+  loop_control:
+    label: "{{ item.file }}"
+  register: siem_indexer_cert_pull
+  changed_when: siem_indexer_cert_pull.stdout == 'changed'
+  check_mode: false
+  notify: Restart the Wazuh indexer
+
+# fetch-ssm-param writes as root; the indexer reads them as itself.
+- name: Hand the certificates to the indexer
+  ansible.builtin.file:
+    path: /etc/wazuh-indexer/certs/{{ item.file }}
+    owner: wazuh-indexer
+    group: wazuh-indexer
+    mode: "0400"
+  loop: "{{ siem_indexer_certs }}"
+  loop_control:
+    label: "{{ item.file }}"
+
+- name: Enable and start the indexer
+  ansible.builtin.systemd_service:
+    name: wazuh-indexer
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Apply indexer changes
+  ansible.builtin.meta: flush_handlers
+
+# A new t3 starts with no CPU credits, so the first start is slow (decision 87).
+- name: Wait for the indexer's HTTPS port
+  ansible.builtin.wait_for:
+    host: "{{ siem_private_ip }}"
+    port: 9200
+    timeout: 900
+
+- name: Install the internal users helper
+  ansible.builtin.copy:
+    src: set-indexer-users
+    dest: /usr/local/sbin/set-indexer-users
+    owner: root
+    group: root
+    mode: "0755"
+  check_mode: false
+
+# Ansible sees only "changed" or "unchanged" (decision 89); the helper's
+# "check" argument makes it read-only.
+- name: Set the indexer's internal users
+  ansible.builtin.command: >-
+    /usr/local/sbin/set-indexer-users {{ 'check' if ansible_check_mode else '' }}
+  register: siem_indexer_users
+  changed_when: siem_indexer_users.stdout == 'changed'
+  check_mode: false

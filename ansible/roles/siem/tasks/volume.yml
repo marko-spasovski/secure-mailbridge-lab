@@ -1,0 +1,78 @@
+---
+# The indexer's data volume from persistent (decision 88). Its ID is looked
+# up from the laptop by Name tag, like proxy's zone ID, so no live ID is in
+# the repo; on the host the NVMe driver names the disk after the volume ID.
+- name: Look up the Wazuh data volume
+  amazon.aws.ec2_vol_info:
+    region: eu-central-1
+    filters:
+      "tag:Name": "{{ siem_data_volume_name }}"
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  register: siem_volume_lookup
+
+# Exactly one volume, attached to this host: anything else means the wrong
+# disk could be formatted below.
+- name: Check the volume is attached to this host
+  ansible.builtin.assert:
+    that:
+      - siem_volume_lookup.volumes | length == 1
+      - siem_volume_lookup.volumes[0].attachment_set | selectattr('instance_id', 'equalto', instance_id) | list | length == 1
+    fail_msg: "Expected one {{ siem_data_volume_name }} volume attached to {{ instance_id }}."
+    quiet: true
+
+- name: Keep the volume's device path
+  ansible.builtin.set_fact:
+    siem_data_device: "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_{{ siem_volume_lookup.volumes[0].id | replace('-', '') }}"
+
+- name: Wait for the volume's device
+  ansible.builtin.wait_for:
+    path: "{{ siem_data_device }}"
+    timeout: 120
+
+# blkid -p probes the raw disk for any filesystem or partition table and
+# exits 2 only when it finds none. Only then is the disk new; a volume with
+# history is never reformatted.
+- name: Probe the volume for an existing filesystem
+  ansible.builtin.command: blkid -p -o value -s TYPE {{ siem_data_device }}
+  register: siem_data_probe
+  changed_when: false
+  failed_when: siem_data_probe.rc not in [0, 2]
+  check_mode: false
+
+- name: Format the volume on first use
+  ansible.builtin.command: mkfs.ext4 -L {{ siem_data_label }} {{ siem_data_device }}
+  when: siem_data_probe.rc == 2
+  changed_when: true
+
+- name: Mount the volume at boot
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: '^LABEL={{ siem_data_label }}\s'
+    line: "LABEL={{ siem_data_label }} {{ siem_indexer_data_dir }} ext4 defaults,noatime,nofail 0 2"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Check whether the volume is mounted
+  ansible.builtin.command: findmnt --mountpoint {{ siem_indexer_data_dir }}
+  register: siem_data_mounted
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Create the mount point
+  ansible.builtin.file:
+    path: "{{ siem_indexer_data_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: siem_data_mounted.rc != 0
+
+# daemon-reload first: systemd builds mount units from fstab.
+- name: Mount the volume now
+  ansible.builtin.shell: systemctl daemon-reload && mount {{ siem_indexer_data_dir }}
+  when: siem_data_mounted.rc != 0
+  changed_when: true

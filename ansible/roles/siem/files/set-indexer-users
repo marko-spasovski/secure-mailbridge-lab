@@ -1,0 +1,106 @@
+#!/bin/bash
+# Managed by Ansible (siem role). Decisions 89 and 90, like set-db-password.
+# Usage: set-indexer-users [check]
+# Makes the indexer's internal users exactly admin and kibanaserver, with the
+# passwords in SSM, and nothing else (the package ships demo users with
+# public passwords). Prints "changed" or "unchanged", never a value. With
+# "check", reports what would change and writes nothing.
+#
+# Values live only in shell variables: printf is a builtin, curl reads its
+# credentials from stdin (-K -) and bcrypt reads the password from stdin, so
+# no password is ever in argv, a log or Ansible output.
+set -euo pipefail
+check=${1:-}
+
+ip=10.0.5.10
+api="https://$ip:9200"
+certs=/etc/wazuh-indexer/certs
+sec=/etc/wazuh-indexer/opensearch-security
+
+get() {
+  /snap/bin/aws ssm get-parameter --region eu-central-1 --name "$1" \
+    --with-decryption --query Parameter.Value --output text
+}
+admin_pw=$(get /siem/indexer-admin-password)
+kibana_pw=$(get /siem/kibanaserver-password)
+[ -n "$admin_pw" ] && [ -n "$kibana_pw" ] || { echo "empty password from SSM" >&2; exit 1; }
+
+# 200 when the user logs in with that password.
+login_ok() {
+  printf 'user = "%s:%s"\n' "$1" "$2" |
+    curl -s -o /dev/null -w '%{http_code}' --cacert "$certs/root-ca.pem" \
+      -K - "$api/_plugins/_security/authinfo" | grep -qx 200
+}
+
+# The user list as the admin certificate sees it, sorted, one per line.
+# Fails (empty) while the security index doesn't exist yet.
+users() {
+  curl -s --cacert "$certs/root-ca.pem" --cert "$certs/admin.pem" \
+    --key "$certs/admin-key.pem" "$api/_plugins/_security/api/internalusers" |
+    python3 -c 'import json, sys; print("\n".join(sorted(json.load(sys.stdin))))' 2>/dev/null || true
+}
+
+if login_ok admin "$admin_pw" && login_ok kibanaserver "$kibana_pw" &&
+  [ "$(users)" = "$(printf 'admin\nkibanaserver')" ]; then
+  echo unchanged
+  exit 0
+fi
+if [ "$check" = check ]; then
+  echo changed
+  exit 0
+fi
+
+# bcrypt cost 12, as the plugin's own hash.sh; $2y$ is the prefix it writes.
+hash() {
+  printf '%s' "$1" | python3 -c 'import bcrypt, sys
+print(bcrypt.hashpw(sys.stdin.buffer.read(), bcrypt.gensalt(12)).decode().replace("$2b$", "$2y$", 1))'
+}
+
+tmp=$(mktemp "$sec/internal_users.yml.XXXXXX")
+trap 'rm -f "$tmp"' EXIT
+cat > "$tmp" <<EOF
+---
+# Written by set-indexer-users (siem role). Only these two users exist.
+_meta:
+  type: "internalusers"
+  config_version: 2
+
+admin:
+  hash: "$(hash "$admin_pw")"
+  reserved: true
+  backend_roles:
+    - "admin"
+  description: "Administrator; used by Filebeat and the Wazuh API"
+
+kibanaserver:
+  hash: "$(hash "$kibana_pw")"
+  reserved: true
+  description: "Wazuh dashboard's own user"
+EOF
+chown root:wazuh-indexer "$tmp"
+chmod 0640 "$tmp"
+mv "$tmp" "$sec/internal_users.yml"
+trap - EXIT
+
+# Uploads every file in $sec to the security index, authenticated by the
+# admin certificate (its DN is admin_dn).
+# Run like the package's indexer-security-init.sh: as wazuh-indexer, with the
+# bundled JDK, -icl (single cluster) and -nhnv (the certificate names an IP).
+JAVA_HOME=/usr/share/wazuh-indexer/jdk OPENSEARCH_CONF_DIR=/etc/wazuh-indexer \
+  runuser -u wazuh-indexer -- \
+  /usr/share/wazuh-indexer/plugins/opensearch-security/tools/securityadmin.sh \
+  -cd "$sec" -icl -nhnv -h "$ip" -p 9200 \
+  -cacert "$certs/root-ca.pem" -cert "$certs/admin.pem" -key "$certs/admin-key.pem" \
+  > /var/log/wazuh-indexer/securityadmin.log 2>&1 ||
+  { echo "securityadmin failed, see /var/log/wazuh-indexer/securityadmin.log" >&2; exit 1; }
+
+# The new hashes are live once both users log in.
+for _ in $(seq 30); do
+  if login_ok admin "$admin_pw" && login_ok kibanaserver "$kibana_pw"; then
+    echo changed
+    exit 0
+  fi
+  sleep 2
+done
+echo "users written but logins still fail" >&2
+exit 1
