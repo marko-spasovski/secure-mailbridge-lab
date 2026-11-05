@@ -57,3 +57,19 @@
   roles:
     - common
     - proxy
+
+# Same pattern as db (decision 50). siem's role installs Wazuh (task 1.16).
+- name: Configure siem
+  hosts: siem
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Wait until siem is reachable through SSM
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+
+    - name: Gather facts
+      ansible.builtin.setup:
+  roles:
+    - common
+    - siem

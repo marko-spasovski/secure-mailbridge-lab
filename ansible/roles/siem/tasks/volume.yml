@@ -1,0 +1,58 @@
+---
+# The indexer's data volume from persistent (decision 88). Its ID is looked
+# up from the laptop by Name tag, like proxy's zone ID, so no live ID is in
+# the repo; on the host the NVMe driver names the disk after the volume ID.
+- name: Look up the Wazuh data volume
+  amazon.aws.ec2_vol_info:
+    region: eu-central-1
+    filters:
+      "tag:Name": "{{ siem_data_volume_name }}"
+  delegate_to: localhost
+  become: false
+  check_mode: false
+  register: siem_volume_lookup
+
+# Exactly one volume, attached to this host: anything else means the wrong
+# disk could be formatted below.
+- name: Check the volume is attached to this host
+  ansible.builtin.assert:
+    that:
+      - siem_volume_lookup.volumes | length == 1
+      - siem_volume_lookup.volumes[0].attachment_set | selectattr('instance_id', 'equalto', instance_id) | list | length == 1
+    fail_msg: "Expected one {{ siem_data_volume_name }} volume attached to {{ instance_id }}."
+    quiet: true
+
+- name: Keep the volume's device path
+  ansible.builtin.set_fact:
+    siem_data_device: "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_{{ siem_volume_lookup.volumes[0].id | replace('-', '') }}"
+
+- name: Wait for the volume's device
+  ansible.builtin.wait_for:
+    path: "{{ siem_data_device }}"
+    timeout: 120
+
+# blkid -p probes the raw disk for any filesystem or partition table and
+# exits 2 only when it finds none. Only then is the disk new; a volume with
+# history is never reformatted.
+- name: Probe the volume for an existing filesystem
+  ansible.builtin.command: blkid -p -o value -s TYPE {{ siem_data_device }}
+  register: siem_data_probe
+  changed_when: false
+  failed_when: siem_data_probe.rc not in [0, 2]
+  check_mode: false
+
+- name: Format the volume on first use
+  ansible.builtin.command: mkfs.ext4 -L {{ siem_data_label }} {{ siem_data_device }}
+  when: siem_data_probe.rc == 2
+  changed_when: true
+
+# Writes the fstab line and mounts it now; by label, which mkfs set above.
+# nofail: a missing volume stops the indexer (decision 92), not the boot.
+- name: Mount the volume
+  ansible.posix.mount:
+    path: "{{ siem_indexer_data_dir }}"
+    src: LABEL={{ siem_data_label }}
+    fstype: ext4
+    opts: defaults,noatime,nofail
+    passno: "2"
+    state: mounted

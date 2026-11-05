@@ -1149,3 +1149,51 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** The admin certificate and key are on siem, because `securityadmin` runs there. A compromised siem could rewrite the indexer's users. That's no worse than what root on siem already has, since the indexer runs there. The certificates last ten years (the tool's fixed `-days 3650`), far longer than public practice. It's a private CA with one client, and rotation is a documented, tested procedure instead of a calendar event. While re-signing, the tool copies the CA key into its output in plaintext, so the procedure shreds it.
 
 **Verify.** `openssl verify -CAfile root-ca.pem` gives OK for all four certificates. Each certificate's public key matches its key. Each SSM value's SHA-256 equals the laptop file's, read with `jq -j` because `--output text` adds a newline. The simulator allows siem's role on `/siem/certs/admin-key` and `/siem/certs/indexer-key` and gives `implicitDeny` on `/wazuh-ca/key`, `/vpn/ca/key` and `/mailbridge/db-password`. After the role is built: the indexer's `admin_dn` is `CN=admin,OU=Wazuh,O=Wazuh,L=California,C=US`, and the dashboard's certificate fingerprint is the same in two sessions.
+
+## 91. Trusting Wazuh's apt repository (2026-11-05)
+
+**Problem.** Wazuh ships its packages from its own repository. Whatever a repository's key signs, apt installs as root. Ubuntu's repositories already supply most packages on siem, and a third-party repository that published `openssl` or `curl` with a higher version would replace them on the next upgrade.
+
+**Options.** A: pin the key by the SHA-256 of its file, limit the repository to Wazuh's four packages with an apt preference, and install each at a pinned version with a hold. B: the guide's way, which imports the key with `gpg` into a keyring and adds the repository with no limits. C: download the four `.deb` files and pin each by SHA-256, like lego.
+
+**Chosen: A.** The key check follows the same pin-and-verify pattern as lego and the CRS. If Wazuh replaces or extends its key, the run fails, and the new fingerprint is checked in a PR. The preference (`Pin-Priority: -1` for `origin packages.wazuh.com`, 500 for the four names) means apt can never take another package from that origin. The hold keeps a routine `apt upgrade` from moving the version under the measurements (decision 85). C needs no repository at all, but the indexer `.deb` is close to a gigabyte, its dependencies would have to be resolved by hand, and apt already verifies each package against the signed index.
+
+**Trade-off accepted.** The key expires on 2027-05-15. Before then, Wazuh publishes an extended key, and the pinned hash has to be updated in a PR. Security fixes in Wazuh arrive only through a version bump PR, never automatically.
+
+**Verify.** `apt-mark showhold` lists `wazuh-indexer`. `apt-cache policy` shows the Wazuh origin at priority -1 for any package outside the four.
+
+## 92. Finding and protecting the Wazuh data volume (2026-11-05)
+
+**Problem.** The data volume from `persistent` is attached as `/dev/sdf`, but on Nitro instances it shows up as an NVMe disk whose number depends on probe order. The first session must format it. Every later session must never format it again, and must never start the indexer without it.
+
+**Options.** A: look up the volume ID by its tag from the laptop and use the `by-id` link that names that ID; format only when `blkid -p` finds nothing; mount through fstab with `ansible.posix.mount`; add `RequiresMountsFor` to the indexer. B: assume `/dev/nvme1n1`. C: a hand-written systemd mount unit and the `community.general.filesystem` module.
+
+**Chosen: A.** The ID is the only stable name, and the run first asserts that exactly one volume with that tag is attached to this instance. `blkid -p` probes the raw disk and exits 2 only when there is no filesystem and no partition table. Any other result means the volume has history, so it's mounted, never formatted. `RequiresMountsFor` makes the indexer depend on the mount. Without it, a failed mount would leave an empty directory on the root disk, and the indexer would start a new, empty cluster there, which would look like lost data. B would format whichever disk enumerates second. C adds a large collection for one task, and its module formats on a `force` flag rather than on a probe we can read; `ansible.posix` (pinned in `requirements.yml`) is small and already on the laptop.
+
+**Trade-off accepted.** `nofail` lets the host boot if the volume is missing, so a missing volume shows up as a stopped indexer, not as an unreachable host.
+
+**Verify.** On the first session, the format task changes and `df` shows the 20 GB volume. On the next session, the format task is skipped and a search from the previous session still returns its documents. `systemctl show wazuh-indexer -p RequiresMountsFor` includes `/var/lib/wazuh-indexer`.
+
+## 93. Where the indexer listens (2026-11-05)
+
+**Problem.** The package's `opensearch.yml` sets `network.host: "0.0.0.0"`, so the REST port 9200 and the node-to-node port 9300 listen on every interface.
+
+**Options.** A: bind to 10.0.5.10, the address in the indexer's certificate. B: keep `0.0.0.0` and rely on sg-siem. C: bind to loopback.
+
+**Chosen: A.** Filebeat and the dashboard run on the same host, but they verify the indexer's certificate, which names 10.0.5.10, so loopback (C) would fail TLS verification unless the certificates were reissued. B leaves one control where two are cheap: sg-siem already refuses 9200 and 9300 from everything, and the bind makes the host agree. Everything else in the file is the package's text, so a version bump shows a clean diff. The heap goes in `jvm.options.d/heap.options`, which OpenSearch reads after `jvm.options`, so the package's file stays untouched.
+
+**Trade-off accepted.** A process on siem reaches 9200 at 10.0.5.10, not at localhost. That's only a naming detail.
+
+**Verify.** `ss -ltn` shows 9200 and 9300 on `10.0.5.10` only. `_cat/nodes?h=heap.max` shows `1.5gb`.
+
+## 94. The indexer's internal users (2026-11-05)
+
+**Problem.** The package's `internal_users.yml` defines seven users: `admin` and `kibanaserver` with demo passwords, and five demo accounts (`anomalyadmin`, `kibanaro`, `logstash`, `readall`, `snapshotrestore`) with passwords that are public. The guide changes passwords afterwards with `wazuh-passwords-tool`, which puts them in its output and leaves the demo accounts in place. The security index lives on the persistent volume, so the users must stay right across sessions without being re-applied blindly.
+
+**Options.** A: a helper that tests both logins and the user list, and only if they differ writes a two-user file with fresh bcrypt hashes and runs `securityadmin`. B: template `internal_users.yml` in Ansible and run `securityadmin` when it changes. C: Wazuh's password tool.
+
+**Chosen: A.** It's the `set-db-password` pattern (decision 52). The passwords stay in shell variables: `curl -K -` takes the credentials on stdin, and Python's `bcrypt` reads the password on stdin, so nothing appears in argv, a file other than the hash file, or Ansible output. The test login is the idempotence check, so no hash has to be stored for comparison. B can't be idempotent, because bcrypt salts every hash, so the template would change on every run. And the hashes would pass through Ansible. C leaves the demo accounts and prints the passwords. `securityadmin` runs as `wazuh-indexer` with the bundled JDK and `-icl -nhnv`, exactly like the package's `indexer-security-init.sh`, and it authenticates with the admin certificate, never a password.
+
+**Trade-off accepted.** Each apply uploads every file in `opensearch-security/`, so a change made in the dashboard's security UI is overwritten the next time a password changes. Code is the source of truth. The `own_index` mapping (any user owns an index named after itself) is left at the default, because only two users exist.
+
+**Verify.** The user list, read with the admin certificate, is `['admin', 'kibanaserver']`. Every demo user and `admin:admin` get 401. `set-indexer-users check` prints `unchanged`. `securityadmin.log` ends in `Done with success` and contains no hash.

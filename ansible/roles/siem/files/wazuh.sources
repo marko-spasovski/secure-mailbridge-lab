@@ -1,0 +1,7 @@
+# Managed by Ansible (siem role). Wazuh's repository, signed by the key the
+# role pins by SHA-256 (decision 86).
+Types: deb
+URIs: https://packages.wazuh.com/4.x/apt/
+Suites: stable
+Components: main
+Signed-By: /etc/apt/keyrings/wazuh.asc

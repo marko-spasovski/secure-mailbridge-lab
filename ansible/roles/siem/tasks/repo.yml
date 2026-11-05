@@ -1,0 +1,32 @@
+---
+# Wazuh's apt repository (decision 86). get_url refuses the key if its
+# SHA-256 differs from the pinned value; apt reads the armored file directly.
+- name: Install Wazuh's signing key
+  ansible.builtin.get_url:
+    url: https://packages.wazuh.com/key/GPG-KEY-WAZUH
+    dest: /etc/apt/keyrings/wazuh.asc
+    checksum: sha256:{{ siem_wazuh_gpg_sha256 }}
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Limit the Wazuh repository to Wazuh's packages
+  ansible.builtin.copy:
+    src: wazuh.pref
+    dest: /etc/apt/preferences.d/wazuh.pref
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Add the Wazuh repository
+  ansible.builtin.copy:
+    src: wazuh.sources
+    dest: /etc/apt/sources.list.d/wazuh.sources
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Refresh the package lists
+
+# The install below needs the Wazuh index now, not at the end of the play.
+- name: Refresh the package lists for the new repository
+  ansible.builtin.meta: flush_handlers
