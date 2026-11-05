@@ -1,8 +1,8 @@
 ---
 # Wazuh all-in-one on siem (task 1.16, decisions 85 to 90). Runs after the
 # common role, which provides apt over HTTPS, the AWS CLI and fetch-ssm-param.
-# This part: the data volume and the indexer. The manager, Filebeat and the
-# dashboard follow in their own task files.
+# Order: the data volume, the indexer, then the manager and Filebeat that
+# write to it; the dashboard follows in its own task file.
 - name: Mount the data volume
   ansible.builtin.import_tasks: volume.yml
 
@@ -11,3 +11,6 @@
 
 - name: Install and configure the indexer
   ansible.builtin.import_tasks: indexer.yml
+
+- name: Install and configure the manager and Filebeat
+  ansible.builtin.import_tasks: manager.yml

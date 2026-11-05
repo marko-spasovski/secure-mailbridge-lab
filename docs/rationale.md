@@ -1197,3 +1197,39 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** Each apply uploads every file in `opensearch-security/`, so a change made in the dashboard's security UI is overwritten the next time a password changes. Code is the source of truth. The `own_index` mapping (any user owns an index named after itself) is left at the default, because only two users exist.
 
 **Verify.** The user list, read with the admin certificate, is `['admin', 'kibanaserver']`. Every demo user and `admin:admin` get 401. `set-indexer-users check` prints `unchanged`. `securityadmin.log` ends in `Done with success` and contains no hash.
+
+## 95. The manager's credentials (2026-11-05)
+
+**Problem.** Three components need secrets after the manager is installed. Filebeat logs in to the indexer from its own keystore. The manager's indexer connector logs in from Wazuh's keystore. The API ships two users, `wazuh` and `wazuh-wui`, whose passwords are their own names. All three must come from SSM, stay out of argv and logs, and survive a run that changes nothing.
+
+**Options.** A: one helper on the host that checks each with the cheapest real test and changes only what fails. B: Ansible tasks with `no_log`, rewriting the keystores on every run. C: Wazuh's `wazuh-passwords-tool`.
+
+**Chosen: A.** Filebeat's check is `filebeat test output`, which logs in with the keystore's values, so the check is the real thing. The API's check is a login with the SSM password. If it fails, the helper logs in with the shipped default, finds the user's ID and sets the password. The JSON body is built from stdin, and the token goes in through a process-substitution header, so it never appears on a command line. Wazuh's keystore is write-only and offers no check, so the helper keeps a SHA-256 of `admin:<password>` in a root-only file and rewrites the keystore only when the SSM value changes. The password is 40 random letters and digits, about 238 bits, so the hash can't be reversed. B would show `changed` on every run, so drift would be invisible, and `no_log` hides errors along with the values. C prints the new passwords.
+
+**Trade-off accepted.** Filebeat and the connector both use the indexer's `admin` user (decision 94). A Filebeat user that can only write to `wazuh-alerts-*` is better least privilege, but root on siem already controls the indexer. It's a Tier 2 hardening item.
+
+**Verify.** `set-manager-credentials check` prints `unchanged`. `wazuh:wazuh` and `wazuh-wui:wazuh-wui` get 401 from the API. `filebeat test output` shows `talk to server... OK` over TLS 1.3. The manager's log shows `IndexerConnector initialized successfully`.
+
+## 96. Wazuh's vulnerability detection is off in Tier 1 (2026-11-05)
+
+**Problem.** The manager ships with vulnerability detection on. It inventories each agent's packages and matches them against Wazuh's CVE feed. At siem's first start the feed (a 436 MB `.tar.xz`) unpacked to a 9.3 GB tar plus 2.8 GB of partly extracted data, and the 20 GB root disk filled up (`No space left on device`). siem is rebuilt every session, so this would happen at every session start.
+
+**Options.** A: turn it off for Tier 1. B: keep it and grow the root disk to about 40 GB. C: keep it and move `/var/ossec/queue/vd` onto the persistent volume, grown to about 30 GB, so the feed downloads once.
+
+**Chosen: A.** Nothing in ARCHITECTURE or TASKS uses it. It was on only because it's the package default. It measures **posture** (known-vulnerable packages), while the lab measures **detection** of attacks across nftables, Suricata, ModSecurity and Wazuh. It isn't T3.2 either: T3.2 is network scanning from outside (Nuclei, Greenbone), while this is agent-based and looks from inside. B makes every session download and unpack about 14 GB on a host with no CPU credits, right when the indexer is starting (decision 87's risk). C is the right design if posture becomes a goal, but it's complexity built ahead of need.
+
+**Trade-off accepted.** There's no CVE view of the lab hosts. If a Tier 2 finding needs one, C is how to turn it on: a bind mount for `queue/vd` on the data volume, owned by `wazuh`, and a bigger volume in `persistent`.
+
+**Verify.** The manager's log shows `Vulnerability scanner module is disabled.` No `vd_*` files appear in `/var/ossec/tmp`. The root disk stays at about 6 GB used after a fresh build.
+
+## 97. Manager addresses, the API, enrollment and start order (2026-11-05)
+
+**Problem.** The package's `ossec.conf` sends the indexer connector to `https://0.0.0.0:9200`. Its API listens on 55000 on every interface. Its authd accepts agent enrollment on 1515 with `use_password no`. The first build also showed two ordering faults: the manager was started and immediately restarted by the config handlers, and Filebeat started before its keystore existed.
+
+**Options.** For each default, change it now or leave it for 1.17. For the order, add retries, or order the tasks so each service starts once, after its inputs exist.
+
+**Chosen.** The connector and Filebeat point at 10.0.5.10, the name in the indexer's certificate (decision 93). The API listens on 127.0.0.1, because only the dashboard on this host uses it and sg-siem never opens 55000. authd is off: with it on and no password, any host in the VPC could enroll as an agent and feed the SIEM false events. 1.17 designs enrollment and its password. The handlers are flushed before the manager's start task, so on a fresh host the handler's restart is its first start. The helper retries while the API warms up. Filebeat starts after the helper has written its keystore. The double start had left an API process holding 55000 that survived `systemctl stop wazuh-manager`, so every later API failed with `address already in use`, and the pool broke ("child processes terminated abruptly"). It was cleared by killing that process by its exact path.
+
+**Trade-off accepted.** Until 1.17, nothing can enroll, which is intended. The stale-process fault was cleared by hand, and the new order is proven only on the next fresh siem.
+
+**Verify.** `ss -ltn` shows 1514 on all interfaces, 55000 on 127.0.0.1, and no 1515. On a fresh siem the first run needs no hand fix, and `pgrep -fc wazuh_apid.py` matches the API's normal pool (5 processes). `systemctl is-active filebeat` shows `active` on the first run.
