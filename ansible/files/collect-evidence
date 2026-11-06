@@ -1,0 +1,30 @@
+#!/bin/bash
+# Run on a lab host by evidence.yml (decision 107). Packs this session's raw
+# logs into one archive and prints its path. Hosts live for one session, so
+# the whole journal is this session's. Reads only; changes no service.
+set -euo pipefail
+out=/var/tmp/evidence-$(hostname -s).tar.gz
+d=$(mktemp -d /var/tmp/evidence.XXXXXX)
+trap 'rm -rf "$d"' EXIT
+j() { journalctl --no-pager -o short-iso-precise "$@"; }
+
+# Every host: who logged in and ran what as root.
+j _COMM=sshd + _COMM=sudo > "$d/auth.log" || true
+
+# fw-ips: nftables drops and egress, OpenVPN, Suricata's EVE output.
+if systemctl cat openvpn-server@server >/dev/null 2>&1; then
+  j -k --grep 'FW-(DROP|INPUT-DROP|EGRESS) ' > "$d/kernel-fw.log" || true
+  j -u openvpn-server@server > "$d/openvpn.log" || true
+  cp -p /var/log/suricata/eve.json* "$d/" 2>/dev/null || true
+fi
+
+# proxy: Nginx's logs and ModSecurity's audit log, rotated copies included.
+if [ -d /var/log/modsecurity ]; then
+  mkdir -p "$d/nginx" "$d/modsecurity"
+  cp -p /var/log/nginx/*.log* "$d/nginx/" 2>/dev/null || true
+  cp -p /var/log/modsecurity/audit.log* "$d/modsecurity/" 2>/dev/null || true
+fi
+
+tar -C "$d" -czf "$out" .
+chmod 0600 "$out"
+echo "$out"
