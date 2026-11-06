@@ -25,6 +25,17 @@
     mode: "0660"
   notify: Restart the Wazuh manager
 
+# The lab's own rules, only where the built-in ones store no alert
+# (decision 106). Loaded from etc/rules at the manager's start.
+- name: Install the lab's Wazuh rules
+  ansible.builtin.copy:
+    src: mailbridge_rules.xml
+    dest: /var/ossec/etc/rules/mailbridge_rules.xml
+    owner: wazuh
+    group: wazuh
+    mode: "0660"
+  notify: Restart the Wazuh manager
+
 - name: Install the API settings
   ansible.builtin.template:
     src: api.yaml.j2
