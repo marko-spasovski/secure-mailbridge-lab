@@ -171,7 +171,8 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Verify: agents show active; a Suricata alert, an nftables drop, a ModSecurity block and a VPN connect all appear in Wazuh
   - Note: Juice Shop's logs and rules are added in 2.13 (decision 71)
   - Note: before 2.15 starts, Wazuh must collect Suricata's `eve.json`, nftables drops (`FW-DROP`, `FW-EGRESS`, `FW-INPUT-DROP`), Nginx access and error logs, the ModSecurity audit log and OpenVPN connect and disconnect logs, each confirmed with a test event in the dashboard
-  - Note: all hosts, `siem` included, are destroyed at every teardown, so Wazuh's data and the logs on each host go with them. Open question for Marko: export Wazuh's data and the evidence to the laptop before each teardown? (Open items)
+  - Note: Wazuh's indexed data survives teardown on its own volume (decision 88); the raw host logs go with each host, and their export is the "Evidence before teardown" item (Open items)
+  - Done 2026-11-06, PR 1b (`wazuh_agent` role, authd with a password, decisions 101, 104): fw-ips, db, app and proxy enrolled (`Agent key generated` for each) and `agent_control -l` lists all four `Active`; `wazuh-agent 4.14.9-1` held, pinned by version; `authd.pass` `root:wazuh 640` on every host; IAM simulator: each agent role `allowed` on `/siem/agent-enrollment-password`, `implicitDeny` on `/siem/indexer-admin-password` and `/siem/certs/admin-key`; today's index holds events from all four agents; second run `changed=0`. Enrollment without the password was refused and logged on 2026-11-05. Next: PR 2
 
 **mon (moved from Tier 2 as T2.1, decision 84).** After 1.17, before the Juice Shop block.
 - [ ] **1.22** `mon` host (10.0.5.20, t3.small) and role: Prometheus, Grafana and Alertmanager; Grafana reachable from the admin pool only (sg-mon, §4); design decisions first (install method, retention on a session-only host, alert channel) · C
