@@ -1087,3 +1087,94 @@ One process slip: the Terraform PR was merged before the teardown, so the teardo
 ### What comes next
 
 Task 1.16, part 2: the Wazuh certificates, made once on the laptop with `wazuh-certs-tool` and stored under `/siem/`. Then part 3, the role: the indexer, its security initialisation, the manager and Filebeat, and the dashboard. The next session starts with a plain `ssh-agent` in the Ansible terminal, then the routine. Expect `9 to add`: fw-ips's 4, db, app, proxy, siem and the volume attachment. siem starts with no CPU credits, so its first run will be slow.
+
+## 2026-11-05
+
+### Today's topic: building a SIEM you can trust, and why "default-on" isn't "designed-in"
+
+Yesterday finished the edge of the lab: VPN, Suricata, Nginx, ModSecurity. Today built the system that watches all of it. Wazuh is three programs with three trust relationships. The **indexer** (OpenSearch) stores events. The **manager** analyses them and runs the API and agent enrollment. The **dashboard** is the human's window. Filebeat carries the manager's alerts into the indexer. Each component authenticates the others with certificates from a private CA, and each has users with passwords. The day's theme was that every default in this stack is built for "it works on first try", not "it's safe". Each one had to be read, judged and either kept or changed on purpose: the listen address, the demo users, the open enrollment port, the vulnerability scanner.
+
+### The big picture
+
+The detection stack is now: nftables → Suricata → Nginx/ModSecurity → app → PostgreSQL, with Wazuh beside them on the mgmt subnet. siem is the one host whose *data* outlives the session (decision 88): its indexer writes to a persistent volume. Everything else about siem, including certificates, passwords and config, is rebuilt from SSM and the repo every session. That split (state on a volume, identity in SSM, behaviour in code) is what makes a disposable SIEM possible. By the end, 5,278 alerts from siem itself were indexed, and the four agents were installed with an enrollment password enforced, waiting for one IAM apply.
+
+### Part 1: A private CA, and where its key must never live (decision 90)
+
+The Wazuh components trust anything signed by their root CA. The indexer even treats any certificate with `CN=admin` as its security administrator. Decision 89 had said "certificates and keys under `/siem/`", and siem's role reads `/siem/*`. Read literally, the SIEM host would hold the key that signs trusted certificates. If an attacker owns siem, they could mint an admin certificate and rewrite the security index.
+
+The fix mirrors the VPN's offline CA. A host holds the certificates it *presents*, never the key that *signs* them. The CA key was encrypted with AES-256 under a passphrase that lives off AWS, and backed up to `/wazuh-ca/key`, which no instance role can read. The IAM simulator proved it: siem is allowed on `/siem/certs/indexer-key` and gets `implicitDeny` on `/wazuh-ca/key`. Note that `parameter/siem/*` can't match `/wazuh-ca/key`, because the wildcard follows the literal `siem/`.
+
+**Testing the procedure, not just the result.** The re-signing steps were run on a throwaway CA, and that showed `wazuh-certs-tool` quietly copies the CA key, in plaintext, into its output folder when re-signing. The README now shreds it. A procedure you've only written down is a guess.
+
+Two shell traps also came up. `aws ssm get-parameter --output text` adds a trailing newline, so a byte-for-byte comparison needs `jq -j`. And in zsh, `$A:parameter` is not "variable A, then `:parameter`": `:p` and `:r` are history modifiers, and they silently corrupted an ARN (`:role` became `ole`). Write `${A}:parameter`.
+
+### Part 2: The indexer, and four defaults that weren't safe (decisions 91 to 94)
+
+- **The repository (91).** A third-party apt repository is trusted as root. Pinning its key by SHA-256 makes a changed key fail the run. An apt preference with `Pin-Priority: -1` for the whole origin and 500 for four package names means Wazuh's repo can never supply `openssl` or `curl`. The packages are held, so a version change is a reviewed PR.
+- **The data volume (92).** On Nitro, `/dev/sdf` appears as an NVMe disk whose number depends on probe order. The only stable name is the volume ID, which the NVMe driver puts in `/dev/disk/by-id/`. The laptop looks the ID up by tag, the run asserts exactly one volume is attached to this instance, and `blkid -p` must find *nothing* (exit 2) before `mkfs` runs. A disk with any history is never formatted. `RequiresMountsFor` stops the indexer from starting without its volume. Without that, it would start on the root disk with a new, empty cluster, which looks exactly like lost data.
+- **The listen address (93).** The package sets `network.host: 0.0.0.0`. sg-siem blocks 9200 and 9300 anyway, but binding to 10.0.5.10 makes the host agree, which is defence in depth that costs one line. Binding to loopback would have failed TLS verification, because the certificate names the IP.
+- **The users (94).** `internal_users.yml` ships seven users, five of them demo accounts with public passwords. The helper writes a file with just `admin` and `kibanaserver`, hashing the passwords with bcrypt read from stdin, and runs `securityadmin` with the admin *certificate*. It's idempotent the `set-db-password` way: it tests the logins, and changes nothing if they work. Templating the file in Ansible can't be idempotent, because bcrypt salts every hash, so every run would produce a new file.
+
+**A false "changed", traced to the second.** After the resize, the users helper reported `changed` with nothing changed. A per-second trace showed the reason: after a start, the admin *certificate* gets cluster health at once, but *password* logins get 503 for about 15 seconds while the security plugin loads its config from the index. The helper had waited for the wrong signal. It now waits until a wrong login gets 401, unless the security index is absent, which means a new volume. Lesson: "the port is open" and "cluster health is green" are not "the service is ready for this request".
+
+### Part 3: The manager, Filebeat, and a process that outlived its own service (decisions 95 and 97)
+
+The manager's defaults: the indexer connector pointed at `https://0.0.0.0:9200`; the API listened on 55000 everywhere, though only the dashboard on the same host uses it; and authd accepted enrollment on 1515 with **no password**. The last one is the serious one: anyone in the VPC could have enrolled a fake agent and fed the SIEM false events. authd was turned off until enrollment was designed (decision 100), and the API was bound to loopback.
+
+Credentials follow one rule: **use the cheapest real test**. Filebeat's check is `filebeat test output`, which logs in with the keystore's values. The API's check is a login. Wazuh's own keystore is write-only, so the helper stores a SHA-256 of what it wrote. That's safe, because a hash of 238 random bits can't be reversed.
+
+**The incident.** The first build started the manager and then immediately restarted it from a config handler. The old API process still held port 55000, every new API failed with `address already in use`, and the worker pool broke ("child processes terminated abruptly"). Then the surprise: that stale process **survived `systemctl stop wazuh-manager`**. It was found by its age (8:51 minutes, older than the restart) and killed by its exact path. The role now flushes handlers *before* the start task, so on a fresh host the first start already has its config. Filebeat had a cousin of the same bug: it started before its keystore existed, crashed on a missing `username`, and systemd gave up after 5 tries. It now starts after the helper. Lesson: **order of operations is part of the design**, and "start, then restart" is not the same as "start once".
+
+### Part 4: Default-on is not designed-in (decision 96)
+
+At its first start the manager downloaded a 436 MB vulnerability feed and unpacked it to a 9.3 GB tar and 2.8 GB of extracted data. The 20 GB root disk filled up. The tempting fix was a bigger disk. The better question was whether we want this feature at all. Wazuh's vulnerability detection measures **posture**: which known-vulnerable packages are installed. The lab measures **detection**: whether an attack is seen. Nothing in the design used it, and it would have repeated a roughly 14 GB unpack every session on a host with no CPU credits. It's off, with the persistent-volume design documented for if posture ever becomes a goal. An honest correction along the way: it was first described as "Tier 3, T3.2", but T3.2 is *network* scanning (Nuclei, Greenbone), which looks from outside. Wazuh's detection is agent-based and looks from inside. Same family, different tool.
+
+### Part 5: The dashboard (decision 98)
+
+TLS 1.3 only, like Nginx and the VPN. `verificationMode: full`, because the indexer's certificate names its IP, so checking the address costs nothing. The `kibanaserver` password goes into the keystore *before the first start*, so the dashboard never logs in with the shipped default. The plugin's API password has to sit in plain text in `wazuh.yml`. That's the plugin's design, accepted with `0600` and an API that only listens on loopback.
+
+**A bug of my own.** The helper made its config directory with `install -d`, which also created the missing *parent* as root. The dashboard couldn't create its own `downloads` folder and restarted 17 times. The journal showed `EACCES`, and the fix was to create each level as the service user. "Permission denied" after you've written a file is often about the directory above it.
+
+### Part 6: Measure before resizing (decision 99)
+
+Decision 87 named the t3.large as a fallback "if the indexer struggles". Today it was measured instead of guessed. The CPU credit balance stayed at 2.6–8 for 2.5 hours, so a `standard` t3 was held to its 20 % baseline, which explains every slow run. 819 MB was free, with **no agents yet**, and there's no swap. When Linux runs out of memory, the OOM killer picks the largest process, which here is the indexer, the one component the measurements depend on. The t3.large doubles RAM, raises the baseline to 30 % and costs about $0.048/hour more. The heap went to 3 GB, under OpenSearch's "at most half of RAM" rule, so Lucene keeps page cache. Terraform changed the type **in place**: stop, modify, start. The volume, IP and config all survived, and every service came back by itself.
+
+### Part 7: Agent enrollment (decisions 100 and 101)
+
+An agent enrolls on 1515 over TLS and receives its own key. Events then travel on 1514, encrypted with that key. **Whoever can enroll can feed the SIEM**, so enrollment is the control. The password lives in SSM, generated by `persistent`. Each agent host's instance role may read that one ARN, and the host pulls it itself, so the value never touches the laptop. The test: from db, an enrollment without the password got `Invalid password`, siem logged `Invalid password provided by 10.0.4.10`, and 0 agents were added. That log line is itself a detection signal for Phase 2.
+
+The agent's installer writes log sources for software it detects. On proxy it added Nginx, in Apache format. That's convenient, but it isn't reviewable and differs per host. The role uses the generic file plus an explicit per-group list. An agent host's apt pin admits only `wazuh-agent`.
+
+### Mistakes and what they taught
+
+- **A broken readiness wait.** `until ss -ltn | grep "10.0.5.10:9200 "` never matched, because `ss` prints `[::ffff:10.0.5.10]:9200`, so the loop spun on siem until it was killed. Poll the service (`curl`), not the formatting of a status tool, and always put a timeout on a wait.
+- **`pkill -f` killed its own shell,** because the pattern appeared in its own command line. Use `pgrep -f "[u]ntil …"`: the regex matches the target but not itself.
+- **A stray playbook run.** A leftover `--tags never,all` ran the whole `site.yml` on four hosts with its output thrown away. It was harmless only because the roles are idempotent. The honest next step was to check, not assume: a full run showed `changed=0`, `/healthz` was 200 and fw-ips's services were active.
+- **Unclear plan hand-off.** A combined `lab` plan was meant to replace an earlier one, and the older one was applied first. That made the newer plan stale (Terraform rejects a saved plan once the state has moved). When a plan supersedes another, say so in the same message.
+- **A gitleaks false positive.** A variable named `…_key_sha256` holding a public hash matched the `generic-api-key` rule. Renaming it to `…_gpg_sha256` was cleaner than an ignore file.
+- **ansible-lint taught two idioms:** use a handler, not `when: x.changed`; use `ansible.posix.mount`, not `mount` in a shell task. Running CI's exact lint version locally in a venv beat pushing and waiting.
+
+### Decisions from this session
+
+90 (Wazuh CA key out of siem's reach), 91 (Wazuh repo pinned and limited), 92 (finding and protecting the data volume), 93 (indexer on 10.0.5.10), 94 (only two internal users), 95 (manager credentials helper), 96 (vulnerability detection off), 97 (manager addresses, API on loopback, enrollment off, start order), 98 (dashboard), 99 (siem on t3.large), 100 (enrollment with a password from SSM), 101 (the `wazuh_agent` role).
+
+### Interview questions to practise
+
+1. Why must a CA's private key never be on a host that only presents certificates? How did you prove siem can't read it?
+2. A third-party apt repository: what can it do to your host, and how do key pinning and apt preferences limit that?
+3. How do you find the right EBS volume on a Nitro instance, and how do you guarantee you never format a disk with data on it?
+4. Why add `RequiresMountsFor` to a database service whose data is on a separate volume?
+5. Why bind a service to a specific IP when the security group already blocks the port?
+6. Why can't you template a bcrypt password file idempotently, and how did you make the helper idempotent instead?
+7. The indexer answered cluster health but refused logins with 503 for 15 seconds. What was happening, and what is the right readiness signal?
+8. What did "address already in use" plus "child processes terminated abruptly" mean, and why does start-then-restart differ from start-once?
+9. When is it right to turn off a security feature that's on by default? Explain posture versus detection.
+10. How did you decide between a t3.medium and a t3.large? What do CPU credits and the OOM killer have to do with a SIEM?
+11. How does Wazuh agent enrollment work, and why is it the security boundary of the whole SIEM?
+12. Why not let the agent's installer pick the log sources?
+13. How do you keep a secret out of `ps`, logs and Ansible output? Name three techniques you used today.
+14. A plan you saved is now "stale". What does that mean, and why is it a safety feature?
+
+### What comes next
+
+Next session, after the routine (expect **9 to add**; siem is now a t3.large): first the three persistence checks. Today's earliest alert (rule 5403 at 2026-11-05T12:04:52) must still be searchable, the dashboard certificate's SHA-256 must still begin `CB:76:56:E8`, and the manager's new start order must need no hand fix. Then finish 1.17 PR 1b (draft PR 74): the agents enroll and show Active, the IAM simulator runs per agent role, a second run shows `changed=0`, then merge. Then PR 2, the §8 log sources with a test event each, and PR 3, decoders and rules where the built-ins miss.
