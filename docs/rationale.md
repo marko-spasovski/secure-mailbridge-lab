@@ -1271,3 +1271,15 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** Root on any agent host can read the password and enroll a fake agent from inside the VPC. In Tier 1 that's accepted, because root on a lab host is already a compromise the SIEM should show. A Phase 2 scenario can test exactly that: does a second agent enrolling from db raise an alert?
 
 **Verify.** `terraform plan` for `persistent` shows 1 to add and for `lab` 4 to add (one inline policy per agent host). The IAM simulator allows each agent role on the enrollment password and denies it every other `/siem/` value. After 1.17's role is built, authd on siem refuses an enrollment without the password (`Invalid password`), and the four agents show `active`.
+
+## 102. Ansible's connection timeout (2026-11-06)
+
+**Problem.** The session's first `site.yml` stopped on fw-ips with `Timeout (12s) waiting for privilege escalation prompt` and `UNREACHABLE`, twice, at different tasks (once at the sshd restart handler, once at a plain file copy). Ad-hoc `become` commands failed the same way minutes later, then ten in a row succeeded in about 2 s each. fw-ips's journal settled where the time went: at 19:15:22 the `sudo` from a failed command opened and closed within 2 ms, yet Ansible waited 12 s for its reply and gave up. Plain `ssh … sudo -n true` through the same SSM proxy took 2.5–3.7 s. The laptop was on a phone hotspot, and every Ansible task crosses SSH, the SSM WebSocket, AWS's SSM endpoint and the agent on the host; a stall longer than the timeout anywhere on that path looks like a dead host.
+
+**Options.** A: `timeout = 60` in `ansible.cfg` `[defaults]`, which is both the SSH connect timeout and the wait for `sudo`'s answer. B: `retries = 3` in `[ssh_connection]`, which retries failed connections but not a `become` wait on a channel that is already open, so not this failure. C: change nothing and export `ANSIBLE_TIMEOUT=60` by hand on a bad network.
+
+**Chosen: A.** It fixes the measured cause, the wait, in code that every run uses. A timeout only costs time when something is slow, so on a good network nothing changes. C depends on remembering it, and B adds a mechanism that wouldn't have helped.
+
+**Trade-off accepted.** A host that is really down, or an SSM session that never opens, is reported after 60 s instead of 12 s. A run that hangs on a slow host waits longer before failing, which is minor next to a full first run of about 17 minutes.
+
+**Verify.** From `ansible/`, `ansible-config dump --only-changed | grep TIMEOUT` prints `DEFAULT_TIMEOUT(…/ansible.cfg) = 60`. A full `site.yml` on the hotspot finishes without `UNREACHABLE` (the 2026-11-06 run used the same value through `ANSIBLE_TIMEOUT`).
