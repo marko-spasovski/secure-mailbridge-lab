@@ -1283,3 +1283,39 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** Until 1.17 PR 2 fills in the lists, proxy collects less than the installer would have given it (no Nginx logs). PR 2 adds them back in the formats the decoders expect.
 
 **Verify.** All four agents show `active` in `agent_control -l` on siem, under their short names. `apt-cache policy wazuh-manager` on an agent host shows no candidate. Agents and manager both report version 4.14.9. A second run reports `changed=0`.
+
+## 102. Ansible's connection timeout (2026-11-06)
+
+**Problem.** The session's first `site.yml` stopped on fw-ips with `Timeout (12s) waiting for privilege escalation prompt` and `UNREACHABLE`, twice, at different tasks (once at the sshd restart handler, once at a plain file copy). Ad-hoc `become` commands failed the same way minutes later, then ten in a row succeeded in about 2 s each. fw-ips's journal settled where the time went: at 19:15:22 the `sudo` from a failed command opened and closed within 2 ms, yet Ansible waited 12 s for its reply and gave up. Plain `ssh … sudo -n true` through the same SSM proxy took 2.5–3.7 s. The laptop was on a phone hotspot, and every Ansible task crosses SSH, the SSM WebSocket, AWS's SSM endpoint and the agent on the host; a stall longer than the timeout anywhere on that path looks like a dead host.
+
+**Options.** A: `timeout = 60` in `ansible.cfg` `[defaults]`, which is both the SSH connect timeout and the wait for `sudo`'s answer. B: `retries = 3` in `[ssh_connection]`, which retries failed connections but not a `become` wait on a channel that is already open, so not this failure. C: change nothing and export `ANSIBLE_TIMEOUT=60` by hand on a bad network.
+
+**Chosen: A.** It fixes the measured cause, the wait, in code that every run uses. A timeout only costs time when something is slow, so on a good network nothing changes. C depends on remembering it, and B adds a mechanism that wouldn't have helped.
+
+**Trade-off accepted.** A host that is really down, or an SSM session that never opens, is reported after 60 s instead of 12 s. A run that hangs on a slow host waits longer before failing, which is minor next to a full first run of about 17 minutes.
+
+**Verify.** From `ansible/`, `ansible-config dump --only-changed | grep TIMEOUT` prints `DEFAULT_TIMEOUT(…/ansible.cfg) = 60`. A full `site.yml` on the hotspot finishes without `UNREACHABLE` (the 2026-11-06 run used the same value through `ANSIBLE_TIMEOUT`).
+
+## 103. fw-ips's kernel settings without a handler (2026-11-06)
+
+**Problem.** The `fw_ips` role copied `/etc/sysctl.d/99-fw-ips.conf` and notified a handler that ran `sysctl --load`. In the session's first run, the copy succeeded, and the `flush_handlers` that followed ran the common role's sshd restart first. That one hit the connection timeout (decision 102), Ansible marked fw-ips unreachable, and the handlers still pending were dropped. The next runs saw the file already correct, reported `ok`, notified nothing, and the kernel kept `net.ipv4.ip_forward = 0`. fw-ips's own play then finished green (`changed=26`, `failed=0`), while db, app, proxy and siem stayed unregistered in SSM, because their traffic to the internet arrived at fw-ips and was never forwarded. db's `wait_for_connection` failed after 600 s. `tcpdump` on fw-ips showed their SYNs to port 443 arriving and nothing leaving. A handler is "do this once, if something changed", and that memory lives only in the running playbook.
+
+**Options.** A: `ansible.posix.sysctl` for each key with `sysctl_set: true`, which reads the live value with `sysctl -n` on every run, sets it with `sysctl -w` if it differs, and keeps the line in `99-fw-ips.conf` for boot. B: keep the copy and handler, and add a task that compares the live values with the file and loads it when they differ. C: `force_handlers = True`, which runs pending handlers after a failed task.
+
+**Chosen: A.** It turns the setting into desired state that's checked every run, rather than an event that has to be remembered. It's one module from a collection the lab already pins. B does the same in two tasks of our own. C doesn't cover this case: it helps when a task *fails*, but an *unreachable* host can't run anything, so its handlers are lost anyway.
+
+**Trade-off accepted.** The file is now written by the module, so its explanations move into the task's comments. On a fresh host the module creates the file with the four keys and no comments. The same handler weakness still exists elsewhere (for example a reload after a config change), but there the next run's service checks or failing tests make the drift visible. Here the play was green while the host didn't route.
+
+**Verify.** `site.yml --limit fw_ips` twice: the second run reports `changed=0`. Then `sysctl -w net.ipv4.ip_forward=0` by hand, and run again: the task reports `changed` for `ip_forward` only, and `sysctl net.ipv4.ip_forward` prints `1` again. `/etc/sysctl.d/99-fw-ips.conf` holds the four keys. Verified 2026-11-06 on the session's fw-ips: two runs `changed=0` (the module reads the old file's `key = value` lines as equal); after `sysctl -w net.ipv4.ip_forward=0`, the next run reported `changed` for `ip_forward` only, and the kernel was back at `1`.
+
+## 104. Pinning Wazuh's packages by version (2026-11-06)
+
+**Problem.** The session's first siem run failed at `Install the indexer at the pinned version` with `no available installation candidate for wazuh-indexer=4.14.9-1`. The version was there: `apt-cache policy` listed `4.14.9-1` next to `4.14.10-1`, which Wazuh had published that afternoon, and `apt-get install -s wazuh-indexer=4.14.9-1` worked. The `apt` module, run on its own in check mode, failed the same way. The cause is how apt chooses a candidate. Decision 91's file gave the four packages priority 500 *by origin*, so the candidate was the newest version from Wazuh. For `name=version`, the module adds a temporary pin for that version, but apt uses only the *first* specific record that matches a package version, and the file's record came first. The candidate stayed 4.14.10, and the module refused to install anything else. `apt-get` with `=version` on its command line overrides pinning, which is why it worked. Until 4.14.10 existed, the newest version and our version were the same, so nothing showed.
+
+**Options.** A: pin by version: `Pin: version 4.14.9-1` for the three Wazuh packages and `Pin: version 7.10.2-2` for filebeat, priority 500, and keep the general `Package: *` origin record at -1, templated from the role's version variables. B: install with `apt-get install pkg=version` in a `command` task. C: bump to 4.14.10.
+
+**Chosen: A.** apt takes a version's priority from the first specific record that matches it, else from the general record. With A, 4.14.9-1 matches 500, 4.14.10-1 matches only the general record and gets -1, and any other package from Wazuh's origin gets -1 as before. The candidate is exactly the reviewed version, so the module installs it and nothing can move it, even without the hold. That's decision 91's intent ("only the packages we chose, at the version we reviewed") written the way apt evaluates it. The version stays in one variable, so a bump is still one reviewed PR. B gives up the module's idempotency and check mode. C only postpones the failure to the next release and skips the review a version change needs.
+
+**Trade-off accepted.** A version bump now changes the pin file too (through the template), so the first run after a bump rewrites it. That's correct, because the bump is the reviewed change.
+
+**Verify.** On siem, `apt-cache policy wazuh-indexer` shows `Candidate: 4.14.9-1`, with `4.14.9-1` at 500 and `4.14.10-1` at -1. `apt-cache policy curl` shows no Wazuh entry above -1. `site.yml --limit siem` installs all four packages, and a second run reports `changed=0`.

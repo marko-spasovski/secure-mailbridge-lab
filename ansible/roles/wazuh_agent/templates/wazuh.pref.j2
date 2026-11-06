@@ -1,0 +1,11 @@
+# Managed by Ansible (wazuh_agent role, decisions 91, 101, 104). On an agent
+# host the Wazuh repository may supply the agent at the reviewed version and
+# nothing else: not the manager, indexer or dashboard, not another agent
+# version, and never a replacement Ubuntu package.
+Package: *
+Pin: origin packages.wazuh.com
+Pin-Priority: -1
+
+Package: wazuh-agent
+Pin: version {{ wazuh_version }}
+Pin-Priority: 500
