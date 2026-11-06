@@ -1,18 +1,28 @@
 ---
 # Kernel settings first: forwarding and send_redirects must already be in
-# place when the nftables rules start forwarding traffic.
-- name: Install the fw-ips kernel settings
-  ansible.builtin.copy:
-    src: 99-fw-ips.conf
-    dest: /etc/sysctl.d/99-fw-ips.conf
-    owner: root
-    group: root
-    mode: "0644"
-  notify: Load fw-ips kernel settings
+# place when the nftables rules start forwarding traffic. The module compares
+# the live kernel value on every run and sets it if it differs, so the
+# setting can't be lost with a handler when a run stops (decision 103).
+# Packets enter and leave on the same interface, so Linux would otherwise tell
+# senders to bypass fw-ips; the kernel honours "all" OR the interface value,
+# so all three send_redirects must be 0.
+- name: Set the fw-ips kernel settings, live and in sysctl.d
+  ansible.posix.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-fw-ips.conf
+    sysctl_set: true
+    state: present
+    reload: false
+  loop:
+    - { name: net.ipv4.ip_forward, value: "1" }
+    - { name: net.ipv4.conf.all.send_redirects, value: "0" }
+    - { name: net.ipv4.conf.default.send_redirects, value: "0" }
+    - { name: net.ipv4.conf.ens5.send_redirects, value: "0" }
 
-# Apply the settings now, not at the next boot, so nftables below runs on a
-# host that already forwards.
-- name: Load kernel settings before the firewall
+# Run the common role's pending handlers (sshd's listen change) before the
+# firewall is loaded, as before.
+- name: Apply pending changes before the firewall
   ansible.builtin.meta: flush_handlers
 
 - name: Install nftables

@@ -1,8 +1,4 @@
 ---
-- name: Load fw-ips kernel settings
-  ansible.builtin.command: sysctl --load /etc/sysctl.d/99-fw-ips.conf
-  changed_when: true
-
 # The ruleset starts with "flush ruleset" and loads atomically, so a reload
 # swaps the old rules for the new ones in one step.
 - name: Reload nftables
