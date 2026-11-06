@@ -7,27 +7,27 @@
 # Output: ~/mailbridge-evidence/<UTC time>/<host>.tar.gz and SHA256SUMS,
 # outside the repo. Mailbridge's audit log holds request headers, so the
 # folder is 0700 and never copied into the repo.
+- name: Choose and create this export's folder on the laptop
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Name the folder after the current UTC time
+      ansible.builtin.set_fact:
+        evidence_dir: "{{ lookup('ansible.builtin.env', 'HOME') }}/mailbridge-evidence/{{ now(utc=true).strftime('%Y-%m-%dT%H%MZ') }}"
+
+    - name: Create the folder
+      ansible.builtin.file:
+        path: "{{ evidence_dir }}"
+        state: directory
+        mode: "0700"
+
 - name: Pack and fetch each host's raw logs
   hosts: fw_ips:proxy:db:app
   become: true
   gather_facts: false
   vars:
-    evidence_root: "{{ lookup('ansible.builtin.env', 'HOME') }}/mailbridge-evidence"
+    evidence_dir: "{{ hostvars['localhost']['evidence_dir'] }}"
   tasks:
-    - name: Choose one folder name for this export
-      ansible.builtin.set_fact:
-        evidence_dir: "{{ evidence_root }}/{{ now(utc=true).strftime('%Y-%m-%dT%H%MZ') }}"
-      run_once: true
-
-    - name: Create the folder on the laptop
-      ansible.builtin.file:
-        path: "{{ evidence_dir }}"
-        state: directory
-        mode: "0700"
-      delegate_to: localhost
-      become: false
-      run_once: true
-
     - name: Pack this host's logs
       ansible.builtin.script: files/collect-evidence
       register: evidence_archive
@@ -51,5 +51,5 @@
     - name: Write SHA256SUMS next to the archives
       ansible.builtin.shell: sha256sum -- *.tar.gz > SHA256SUMS && chmod 0600 -- *.tar.gz SHA256SUMS
       args:
-        chdir: "{{ hostvars[groups['fw_ips'][0]]['evidence_dir'] }}"
+        chdir: "{{ evidence_dir }}"
       changed_when: true
