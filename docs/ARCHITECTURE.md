@@ -81,7 +81,7 @@ Deploy: Terraform (infra) + Ansible (config) · Teardown: `terraform destroy` wh
 | db | t3.micro | 20 GB | PostgreSQL | 1 |
 | siem | t3.large (was t3.medium, decisions 87, 99) | 20 GB, plus a 20 GB data volume from `persistent` (decision 88) | Wazuh 4.14.9 all-in-one: manager, indexer, Filebeat, dashboard (decisions 85, 86) | 1 |
 | vuln | t3.small | 10 GB | OWASP Juice Shop in Docker, from its own ECR repository by digest; exists only with `vuln_enabled` (decisions 67, 69, 74) | 1 (Phase 2) |
-| mon | t3.small | 20 GB | Prometheus, Grafana, Alertmanager (moved into Tier 1, decision 84) | 1 |
+| mon | t3.small | 20 GB, plus a 10 GB data volume in `persistent` (decision 109) | Prometheus and Alertmanager from pinned release tarballs, Grafana from its pinned apt repository (decision 108); alerts to a Discord webhook from SSM (decision 110). Moved into Tier 1, decision 84 | 1 |
 
 All instances: IMDSv2 required · SSM agent (admin access; Ansible uses SSH tunnelled through SSM to sshd on loopback, so port 22 is never open to any network) · unattended security updates · apt over HTTPS (regional Ubuntu mirror, port 80 stays closed) · Wazuh agent · node_exporter.
 
@@ -256,6 +256,7 @@ For each: attack → detection (or miss) → custom rule/fix → re-test.
 - AWS Budget alert at **$20** on day one
 - `terraform destroy` when not in use (stopped VMs still pay for disks + public IP). Between sessions, `terraform apply -var hosts_enabled=false` removes every session host (fw-ips with its Elastic IP and the `vpn` record, and the private hosts) (decision 51); the network stays up (decision 16). Each session starts with `terraform apply` and `ansible-playbook site.yml` (decision 41)
 - The Wazuh data volume (20 GB gp3, encrypted, in `persistent`) costs about $1.90/month even between sessions (decision 88)
+- The Prometheus data volume (10 GB gp3, encrypted, in `persistent`) adds about $0.80/month once mon is built (decision 109)
 - Approx. compute ~$0.15/hour for the full set — a few hours per week stays within credits (verify in AWS Pricing Calculator)
 - mon adds a t3.small (about $0.024/hour) and siem a t3.large (about $0.096/hour, decision 99); with both, a full session is roughly $0.22/hour (decision 84)
 - Juice Shop adds a t3.small (about $0.024/hour) and its 10 GB disk only while `vuln_enabled` is on, plus a few hundred MB in ECR; no hourly fixed resource (decision 74)
@@ -283,7 +284,7 @@ Everything runs on AWS. There is no VPS phase, and no VPS is used anywhere in th
 secure-mailbridge-lab/
   terraform/
     modules/      network/ security/ compute/   (shared)
-    persistent/   created once, never destroyed: encrypted VPN CA backup + secrets, Wazuh data volume, backup bucket, flow log bucket, state bucket, Route 53 zone, ECR repository, Budget
+    persistent/   created once, never destroyed: encrypted VPN CA backup + secrets, Wazuh data volume, Prometheus data volume, backup bucket, flow log bucket, state bucket, Route 53 zone, ECR repository, Budget
     lab/          VPC, subnets, SGs (free, kept between sessions) · VMs, Elastic IP, vpn.<domain> record (removed after every session) (uses modules/)
   ansible/        roles: fw_ips/ proxy/ app/ db/ vuln/ siem/ mon/   (Ansible role names cannot contain hyphens; the host stays fw-ips)
   suricata-rules/ custom rules + test pcaps

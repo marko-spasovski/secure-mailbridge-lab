@@ -1355,3 +1355,39 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** The archives hold sensitive material: Mailbridge's audit log has request headers (part B, decision 66), which can include session cookies, and the logs hold VPN client addresses. The folder is `0700`, the files `0600`, and nothing is ever copied into the public repo. siem is skipped: its alerts are on the persistent volume, and its own logs aren't evidence for the scenarios. A playbook run is an action, not configuration, so it reports `changed` every time.
 
 **Verify.** `ansible-playbook evidence.yml` from `ansible/` fetches four archives. `sha256sum -c SHA256SUMS` in the new folder prints `OK` four times. `stat` shows `700` on the folder and `600` on the files. `tar -tzf fw-ips.tar.gz` lists `kernel-fw.log`, `openvpn.log`, `eve.json` and `auth.log`, and `proxy.tar.gz` lists `nginx/` and `modsecurity/`. `/var/tmp` on each host has no `evidence` file left. Verified on 2026-11-06: the session's scan test appears as 16 lines in `kernel-fw.log`, both ModSecurity blocks in `audit.log`, and the VPN reconnect in `openvpn.log`.
+
+## 108. How mon installs its software (2026-11-06)
+
+**Problem.** mon (task 1.22, decision 84) runs Prometheus, Alertmanager and Grafana. Each install method decides how much third-party code runs as root, how a version is chosen, and what can change without review.
+
+**Options.** A: Prometheus and Alertmanager from the official release tarballs, pinned by SHA-256, with our own systemd units; Grafana from Grafana's apt repository with a pinned key, version pin and hold. B: Docker Compose with images pinned by digest, as on app. C: Ubuntu's packages.
+
+**Chosen: A**, decided by Marko. Prometheus and Alertmanager are single static Go binaries, so a checksum-pinned download and a hand-written unit (a dedicated user, `ProtectSystem=strict`, only its data directory writable) is the whole install, the same pattern as lego (decision 59). Grafana is a larger package with plugins and a web server, and its apt repository gets the same treatment as Wazuh's: key pinned by hash, the repository limited to `grafana` at one version (decisions 91, 104), held. B adds Docker and a container boundary to a host whose job is to watch the others. C ships an old Prometheus 2.x and no Grafana at all.
+
+**Trade-off accepted.** We maintain three systemd units and the checksum list, and upgrades are manual PRs. That's the point: each version change is reviewed.
+
+**Verify (once built).** `systemctl show prometheus -p User` isn't root. `prometheus --version` matches the pin, and a changed checksum in `defaults` fails the run before anything is installed. `apt-cache policy grafana` shows the pinned version at 500 and any other at -1, and `dpkg -l grafana` shows `hi`.
+
+## 109. Where Prometheus keeps its data (2026-11-06)
+
+**Problem.** mon is destroyed at every teardown like every session host. Prometheus stores its time series on local disk, so by default each session starts with no history.
+
+**Options.** A: a 10 GB encrypted gp3 volume in `persistent`, attached each session, as for Wazuh. B: nothing kept, and graphs exported into the evidence folder per run. C: Amazon Managed Prometheus through remote write.
+
+**Chosen: A**, decided by Marko. The Juice Shop block measures the same attacks under different settings, often in different sessions, and Grafana can only put two runs side by side if both are in one database. The volume reuses decisions 88 and 92 exactly: found by its ID under `/dev/disk/by-id`, formatted only when `blkid -p` finds nothing, mounted with `nofail`, and Prometheus's unit gets `RequiresMountsFor`, so it can never start an empty database on the root disk. B makes every comparison a manual job with screenshots. C bills per sample ingested and per query, an open-ended cost the guardrails rule out.
+
+**Trade-off accepted.** About $0.80 a month between sessions, and one more volume to stop cleanly before teardown (Prometheus is stopped before the apply, like Wazuh). Retention is set by size (`--storage.tsdb.retention.size`) below the volume's capacity, so the disk never fills.
+
+**Verify (once built).** After a teardown and rebuild, a query over the previous session's time range in Grafana returns data. `findmnt /var/lib/prometheus` shows the volume, and stopping the mount makes the unit refuse to start.
+
+## 110. Where alerts go (2026-11-06)
+
+**Problem.** Alertmanager decides who hears about host down, disk over 80 %, a certificate under 14 days, a failing probe and CPU credits near zero (task 1.23). An alert nobody receives is the same as no alert.
+
+**Options.** A: a Discord webhook, its URL stored by Marko in SSM as a `SecureString`, pulled by mon with a one-parameter grant. B: email over SMTP. C: no external channel, only the Alertmanager and Grafana UIs.
+
+**Chosen: A**, decided by Marko. Alertmanager supports Discord natively. The webhook URL is a bearer secret (anyone holding it can post to the channel), so it follows the lab's secret pattern: put in SSM by hand like `/wazuh-ca/key` (decision 90), pulled by the host with its own role (decisions 39, 47), written `0600` for Alertmanager's user, and never in the repo, Terraform state or Ansible output. Its traffic goes to Discord on 443, which fw-ips already allows and logs as `FW-EGRESS` (rule 100102). B needs SMTP credentials and outbound 587, which means a change to Marko's nftables ruleset and a mail account to protect. C defeats the purpose.
+
+**Trade-off accepted.** Alerts depend on a third-party service, and a leaked URL lets someone post fake alerts (it can't read anything). The URL can be rotated in Discord in seconds.
+
+**Verify (once built).** The IAM simulator allows mon on the webhook parameter only. A forced test alert (stop a node_exporter) reaches the channel within the group wait and clears when the exporter starts. `ps` and the journal never show the URL.

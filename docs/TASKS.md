@@ -178,6 +178,7 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
 
 **mon (moved from Tier 2 as T2.1, decision 84).** After 1.17, before the Juice Shop block.
 - [ ] **1.22** `mon` host (10.0.5.20, t3.small) and role: Prometheus, Grafana and Alertmanager; Grafana reachable from the admin pool only (sg-mon, §4); design decisions first (install method, retention on a session-only host, alert channel) · C
+  - Decided 2026-11-06 by Marko: pinned release tarballs for Prometheus and Alertmanager, Grafana from its pinned apt repository (decision 108); a 10 GB persistent data volume like Wazuh's (decision 109); a Discord webhook in SSM, stored by Marko, pulled by mon (decision 110). PRs: (1) Terraform: sg-mon, the NACL and SG rules of §4, the instance, its IAM role and the volume in `persistent`; (2) the `mon` role; (3) exporters and alerts (1.23). Marko must create the Discord webhook and put its URL in SSM before PR 3
   - Verify: Grafana answers on 10.0.5.20:3000 from the admin pool and times out from the user pool; Prometheus shows its own target `up`
   - Layer loop: hand build, compare with code, rebuild from code, second run `changed=0`
 - [ ] **1.23** Exporters and alerts: node_exporter on every host (the vuln host too, across fw-ips: nftables rule by Marko and SG rule by IP), postgres_exporter on db, blackbox_exporter probing `https://mail.<domain>` (sg-proxy and the dmz NACL accept 443 from 10.0.5.20); Alertmanager rules for host down, disk over 80 %, certificate under 14 days, probe failing, and CPU credit balance near 0 · C
