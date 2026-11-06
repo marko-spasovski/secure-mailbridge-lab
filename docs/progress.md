@@ -111,3 +111,21 @@ Update at the end of every session: what was done, what's verified, next step.
 - Still Marko's: move `~/mailbridge-pki/wazuh/ca-passphrase` into the password manager and `shred -u` it.
 - Next: `Read START.md`, run the routine (expect 9 to add), the three persistence checks above, then finish PR 74 and continue 1.17.
 - Verified at end: Wazuh flushed and stopped in order (dashboard, Filebeat, manager, indexer); teardown `4 added` (the agent IAM policies), `9 destroyed`; 0 instances, Elastic IPs, AMIs and snapshots; the only volume is `mailbridge-lab-wazuh-data`, 20 GB, `available`; `plan -var hosts_enabled=false` shows no changes.
+
+## 2026-11-06
+- Session routine: `9 added`; dynamic inventory found all five hosts; cloud-init `done`. The first `site.yml` needed three fixes (below) before it finished; afterwards a full run `changed=0` on all five hosts; VPN, private DNS, `/healthz` 200 through Nginx; plan clean.
+- Persistence checks passed: the 2026-11-05 index still searchable (earliest alert rule 5403 at 12:04:52, 5,284 alerts), dashboard certificate `CB:76:56:E8`, manager start order needed no hand fix (`NRestarts=0`, one API process, no `address already in use`).
+- Found and fixed, each with a decision and a PR:
+  - 102 (PR 76): Ansible's `timeout` is 60 s. On the phone hotspot the SSH-in-SSM channel stalled for more than 12 s; fw-ips's journal showed the awaited `sudo` finishing in 2 ms.
+  - 103 (PR 78): fw-ips's kernel settings by `ansible.posix.sysctl`. The interrupted first run lost the `sysctl --load` handler, so fw-ips kept `ip_forward = 0` and no private host reached SSM. Verified: setting it to 0 by hand is repaired by the next run.
+  - 104 (PR 77): Wazuh's packages pinned by version, not origin. Wazuh released 4.14.10 today, and with an origin pin the `apt` module refused `=4.14.9-1`. Candidate now `4.14.9-1`, `4.14.10-1` at -1. Applied to the agent too (PR 74).
+- Done and verified, 1.17 (complete): PR 74 (1b) agents enrolled and `Active` on fw-ips, db, app and proxy, IAM simulator per role; PR 79 (2, decision 105) log sources per group; PR 80 (3, decision 106) the lab's own rules for nftables drops and egress, drop bursts, OpenVPN session ends and ModSecurity 403s. Test events and live tests in TASKS 1.17.
+- Done and verified: `ansible/evidence.yml` (PR 81, decision 107): four archives and `SHA256SUMS` in `~/mailbridge-evidence/<UTC time>/`, checksums OK, nothing left on the hosts. Part of the end-of-session routine now.
+- Decided (Marko): mon installs from pinned tarballs plus Grafana's pinned apt repository (108), keeps Prometheus data on a 10 GB persistent volume (109), and alerts to a Discord webhook in SSM (110).
+- Seen: an internet scanner on UDP 1194 was rejected by tls-crypt, and Wazuh stored it as 81803 (T1133) without any test. A client `Ctrl+C` sends no exit notice, so the server only sees a disconnect when the same certificate reconnects or the keepalive runs out.
+- Baselines for next session: 2026-11-05 index 5,284 alerts; 2026-11-06 index 5,282, earliest rule 5502 at 2026-11-06T20:09:05; 177 alerts from rules 100100–100299 before the stop; dashboard certificate SHA-256 begins `CB:76:56:E8`.
+- Cost: about $0.75 for about 3.5 hours of hosts; between sessions as before (Wazuh volume about $1.90 a month).
+- Not done: an OpenVPN disconnect proven live (logtest only); profiling the slow fw-ips runs (the hotspot stalls explain part of it); the Mailbridge repo's old-name cleanup; Marko's `ca-passphrase` move.
+- Still Marko's: move `~/mailbridge-pki/wazuh/ca-passphrase` into the password manager and `shred -u` it; create the Discord webhook and store its URL in SSM before 1.23.
+- Next: `Read START.md`, run the routine (expect 9 to add; agents now enroll in the last play of `site.yml`), the persistence checks above, then 1.22 PR 1: mon's Terraform (sg-mon, §4's NACL and SG rules, instance, IAM, the data volume in `persistent`).
+- Verified at end: evidence exported (`2026-11-06T2153Z`, checksums OK); Wazuh stopped in order with a flush (`failed: 0`); teardown `9 destroyed`; 0 instances, Elastic IPs, AMIs and snapshots; the only volume is `mailbridge-lab-wazuh-data`, 20 GB, `available`; `plan -var hosts_enabled=false` shows no changes.

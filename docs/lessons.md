@@ -1178,3 +1178,100 @@ The agent's installer writes log sources for software it detects. On proxy it ad
 ### What comes next
 
 Next session, after the routine (expect **9 to add**; siem is now a t3.large): first the three persistence checks. Today's earliest alert (rule 5403 at 2026-11-05T12:04:52) must still be searchable, the dashboard certificate's SHA-256 must still begin `CB:76:56:E8`, and the manager's new start order must need no hand fix. Then finish 1.17 PR 1b (draft PR 74): the agents enroll and show Active, the IAM simulator runs per agent role, a second run shows `changed=0`, then merge. Then PR 2, the §8 log sources with a test event each, and PR 3, decoders and rules where the built-ins miss.
+
+## 2026-11-06
+
+### Today's topic: from "the SIEM runs" to "the SIEM sees", and three bugs that only a rebuild could find
+
+Yesterday ended with Wazuh built and agents installed but not enrolled. Today closed task 1.17: every host reports to Wazuh, every source in §8 is collected, and where Wazuh's own rules stay silent, the lab's rules make the event an alert. Before any of that, the session routine itself broke three times. Each failure was a real defect that had been hidden because the conditions that expose it hadn't happened yet: a slow network, an interrupted run, and a new upstream release. They are the best lesson of the day, so they come first.
+
+### The big picture
+
+The detection chain is now complete for Tier 1: a packet that fw-ips drops, a TLS anomaly Suricata flags, a request ModSecurity blocks, a VPN login, and a `sudo` on any host all end up as searchable alerts on the persistent indexer, each with a readable description, and the raw lines that no rule matched are exported to the laptop before teardown. What's left of Tier 1's build is `mon` (health metrics), then the Juice Shop block, where this chain gets measured.
+
+### Part 1: A timeout is a hypothesis about where time goes (decision 102)
+
+The first `site.yml` died on fw-ips with `Timeout (12s) waiting for privilege escalation prompt`. The obvious reading is "sudo is slow" or "the host is overloaded". The journal said otherwise: at the moment Ansible gave up, fw-ips had logged that very `sudo` session opening and closing within 2 milliseconds. So the host had answered; the answer just hadn't arrived. The laptop was on a phone hotspot, and every Ansible task travels laptop → SSH → the SSM WebSocket → AWS's SSM endpoint → the agent on the host and back. A mobile link stalls for seconds at a time.
+
+The method matters more than the fix: **measure where the time goes before you change a timeout.** Plain `ssh … sudo -n true` through the same proxy took 2.5–3.7 s, and ten `become` pings in a row all succeeded, so the failures came in bursts, which points to the network. Only then did raising Ansible's `timeout` to 60 s become a fix rather than a guess. Option B, SSH `retries`, would not have helped: it retries a failed *connection*, and this was a wait on a connection that was already open. Knowing exactly which knob covers which failure is the difference between understanding and cargo cult.
+
+### Part 2: Handlers are memory, and memory can be lost (decision 103)
+
+With the timeout raised, the next run showed fw-ips green and db unreachable for ten minutes. `tcpdump` on fw-ips showed db's SYNs to port 443 arriving and nothing leaving, and `sysctl` gave the answer: `net.ipv4.ip_forward = 0`. The file in `/etc/sysctl.d/` said 1.
+
+What happened: the first, interrupted run had copied the file and *notified* the handler that runs `sysctl --load`. Handlers run at the next `flush_handlers`; there the common role's sshd restart came first, hit the old 12 s timeout, and Ansible marked the host unreachable. Pending handlers live only in the running playbook's memory, so the notification died with the run. Every later run found the file already correct, reported `ok`, notified nothing, and the kernel never learned the setting.
+
+The lesson is about the difference between **events and state**. A handler says "something changed, do this once". A module like `ansible.posix.sysctl` with `sysctl_set: true` says "the kernel value must be 1"; it reads the live value on every run and fixes it if it isn't. The second kind can't be lost, because it doesn't depend on remembering anything. The proof was a deliberate break: `sysctl -w net.ipv4.ip_forward=0` by hand, then a run, which reported `changed` for that key only and restored it. `force_handlers` was the tempting wrong answer: it runs handlers after a *failed* task, but an *unreachable* host can't run anything.
+
+Note how a green play hid a broken host. fw-ips's play passed with `changed=26, failed=0` while fw-ips didn't route. Configuration management checks the steps you wrote; it doesn't check the property you care about unless you write a step that checks it.
+
+### Part 3: How apt really chooses a version (decision 104)
+
+siem then failed with `no available installation candidate for wazuh-indexer=4.14.9-1`, while `apt-cache policy` listed `4.14.9-1` and `apt-get install -s wazuh-indexer=4.14.9-1` worked. The difference was the tool. Wazuh had released 4.14.10 that afternoon.
+
+apt picks a **candidate** for each package: the version with the highest priority, and among equal priorities the newest. Priorities come from `/etc/apt/preferences.d/`: for each available version, the first *specific* record (naming the package) that matches decides; if none does, the first *general* record (`Package: *`) does. Decision 91's file gave the four Wazuh packages priority 500 by *origin*, so 4.14.9 and 4.14.10 both had 500, and the newest, 4.14.10, became the candidate. `apt-get pkg=version` overrides the candidate on its command line. Ansible's `apt` module instead adds a temporary version pin, but a specific record from our file matched first, so the candidate stayed 4.14.10 and the module refused. Until today the newest version and the reviewed version were the same, which is why the bug was invisible for two days.
+
+The fix states the intent the way apt evaluates it: `Pin: version 4.14.9-1` for the Wazuh packages (and filebeat's own version), priority 500, with `Package: * / origin packages.wazuh.com` at -1. Now 4.14.10 matches only the general record and gets -1, which means "never install". The candidate is exactly the reviewed version, even without the hold. Version bumps stay one reviewed variable, because the file is a template.
+
+### Part 4: Enrolling agents, and reading a status correctly
+
+With the routine finally green, PR 74's agents enrolled: authd logged `Agent key generated` for each host, and `agent_control -l` showed them `Pending`. That looked like a failure until the host clock showed the check had been taken about a minute after enrollment, in the middle of the agents' normal reload for the manager's shared configuration. A minute later all four were `Active`. Lesson: before diagnosing a state, check *when* you observed it. A second, related trap came later: the laptop logs in local time (UTC+1) and the hosts in UTC, and a pasted VPN log that looked fresh was an hour old.
+
+The IAM simulator confirmed the least-privilege side: each agent role is `allowed` on `/siem/agent-enrollment-password` and gets `implicitDeny` on the indexer password and the admin key. A small detail of the CLI: with several resource ARNs, the per-resource answer is in `ResourceSpecificResults`; the top-level `EvalDecision` only shows the action's ARN template.
+
+### Part 5: Collection is not detection (decision 105)
+
+PR 2 told each agent what to read, per group in `group_vars`: Suricata's `eve.json` on fw-ips (one JSON object per line, so `json`), Nginx's access and error logs on proxy (`syslog`, as Wazuh's Nginx guide does for the combined format), and the ModSecurity audit log (`json`, because Serial JSON writes one transaction per line). Kernel drops, OpenVPN and auth already come through journald, so reading `/var/log/syslog` too would have duplicated every event.
+
+Then each source got one test event. Suricata, ModSecurity (through Nginx's error log), Nginx, OpenVPN logins and auth all produced alerts from built-in rules. But a drop from the admin pool to a blocked port produced nothing, and `wazuh-logtest` showed why: the line was decoded perfectly (action, both addresses, both ports, protocol) and then stopped at rule 4100, level 0, a grouping rule. Wazuh's child rules match the action `DROP` exactly; ours is `FW-DROP`. OpenVPN's session-end lines stopped at 81800, and the ModSecurity JSON landed on the generic 1002 at level 2, only because its text contains the word "Attack". Wazuh stores alerts from level 3. So "the log arrives" and "the event is searchable" are two different claims, and only a test event per source tells them apart.
+
+`wazuh-logtest` is the tool to learn here. It shows the three phases: pre-decoding (timestamp, host, program), decoding (which decoder and which fields), and rule matching (which rule and level). It turns "why is there no alert?" from guessing into reading.
+
+A useful side discovery: `Ctrl+C` on the OpenVPN client is a hard `SIGINT` that sends no exit notice, so the server logged no disconnect at all. It only learned the session was gone when the same certificate reconnected (`MULTI: new connection … previous active sessions … dropped`), or would have after the keepalive timeout. A detection that depends on a "disconnect" line must handle all three shapes.
+
+### Part 6: Writing rules as children (decision 106)
+
+PR 3's rules are children (`if_sid`) of the built-in parent that already decodes each line, in one file, `mailbridge_rules.xml`, IDs 100100–100299. A child rule adds only the judgement ("this deserves level 5") and a readable description built from decoded fields, such as `$(srcip) to $(dstip):$(dstport)`. It inherits the parent's groups, so later rules and dashboards find it like Wazuh's own. The alternative, new decoders, would duplicate parsing that already works.
+
+Two rules deserve a closer look. 100103 is a **frequency rule**: 10 events from the `firewall_drop` group from the same source address within 60 s raise a level-10 alert mapped to MITRE T1046 (network service discovery). It's safe from false positives because nftables logs at most 10 drops a second, so 10 in a minute from one address is a scan or a misconfiguration. Live, a connect attempt to 12 blocked ports gave 11 single-drop alerts and the burst alert in place of the 12th. 100102 stores *allowed* egress at level 3, because an SSRF or a reverse shell to an allowed 443 destination would show up nowhere else; the cost is a few thousand alerts a day on an indexer sized for it.
+
+Every rule was proven twice: by `wazuh-logtest` with a real line, including an unrelated OpenVPN line that must *not* match, and by a live event found in the indexer.
+
+### Part 7: Evidence that survives the teardown (decision 107)
+
+Wazuh keeps alerts across sessions, but a miss in the findings report is, by definition, an event no rule stored. `ansible/evidence.yml` keeps the raw lines: a read-only collector packs each host's session logs (auth everywhere; the kernel's `FW-*` lines, OpenVPN and `eve.json` on fw-ips; Nginx and the audit log on proxy), Ansible fetches one archive per host to `~/mailbridge-evidence/<UTC time>/`, writes `SHA256SUMS`, and deletes the host copy. The folder is `0700` because Mailbridge's audit log holds request headers, which can include session cookies. ansible-lint rejected the first version's `run_once` (it behaves differently under the `free` strategy); a first play on `localhost` that chooses the folder, read by the host play from `hostvars`, is cleaner anyway.
+
+### Part 8: mon's design (decisions 108–110)
+
+Marko chose the recommended options for `mon`: Prometheus and Alertmanager from checksum-pinned release tarballs with our own systemd units and Grafana from its apt repository pinned by version (the lego and Wazuh patterns); the Prometheus data on a 10 GB persistent volume handled exactly like the Wazuh volume, so Juice Shop runs from different sessions can be compared in one database; and alerts to a Discord webhook whose URL Marko stores in SSM, pulled by mon with a one-parameter grant.
+
+### Mistakes and what they taught
+
+- **Diagnosing from a single sample.** The first timeout looked like the sshd restart's fault; the second, at a plain file copy, ruled that out. Two failures at different places point to the path, not the task.
+- **A green play is not a working host.** fw-ips passed while it didn't route. When a downstream host fails, check the upstream property (here `ip_forward`), not just its play's recap.
+- **Reading a status at the wrong moment.** `Pending` agents and an "old" VPN log were both timing illusions. Note the host's clock and the time zone before concluding.
+- **Merge order for append-only docs.** Four PRs appended to `decisions.md` and `rationale.md`. Merging `main` into each branch and placing the entries by number kept 101 → 106 in order without rewriting history (a force-push was refused, and a merge was the safer route anyway).
+- **A wrong unit name.** `openvpn-server@mailbridge` showed `inactive` because the unit is `openvpn-server@server`. Check the name before reading a state.
+
+### Decisions from this session
+
+102 (Ansible timeout), 103 (sysctl as state, not a handler), 104 (version pins), 105 (log sources), 106 (the lab's Wazuh rules), 107 (evidence export), 108 (mon's install method), 109 (Prometheus's persistent volume), 110 (Discord alerts).
+
+### Interview questions to practise
+
+1. Ansible reported a host unreachable, but the host's journal showed the command finishing in 2 ms. Where was the time, and how did you prove it before changing anything?
+2. What is the difference between a handler and a module that checks state? Describe a failure that only the second survives.
+3. Why doesn't `force_handlers` help when a host becomes unreachable?
+4. How does apt choose a package's candidate version? Why did `apt-get pkg=version` work while Ansible's `apt` module failed?
+5. Why pin a third-party package by version in apt preferences when it's already held?
+6. A log arrives at the SIEM but never appears as an alert. How do you find out why? Walk through `wazuh-logtest`'s three phases.
+7. Why write custom Wazuh rules as children of built-in rules rather than new decoders?
+8. How does a frequency rule work, and why is "10 drops in 60 s" safe from false positives in this lab?
+9. Why store allowed egress as alerts? What attack would be invisible otherwise?
+10. An OpenVPN client is killed with `Ctrl+C`. What does the server log, and when? How does that affect a "disconnect" detection?
+11. Why export raw logs when the SIEM's data already survives teardown?
+12. Why does mon's metric history go on a persistent volume, and what protects it from being formatted or replaced by an empty database?
+
+### What comes next
+
+Next session: the routine (expect **9 to add**; the agents now enroll in `site.yml`'s last play), the persistence checks (2026-11-06 index 5,282 alerts with earliest rule 5502 at 20:09:05, certificate `CB:76:56:E8`), then 1.22 PR 1: mon's Terraform. Before 1.23, Marko creates the Discord webhook and stores its URL in SSM.
