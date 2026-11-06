@@ -1,0 +1,13 @@
+---
+# proxy's log sources for its Wazuh agent (task 1.17, decision 105).
+wazuh_agent_localfiles:
+  # Nginx in its default combined format; Wazuh's Nginx guide reads both as
+  # syslog, and its web access-log decoders parse the combined lines.
+  - format: syslog
+    location: /var/log/nginx/access.log
+  - format: syslog
+    location: /var/log/nginx/error.log
+  # ModSecurity's audit log: Serial, JSON, one transaction per line, parts
+  # ABFHZ with no bodies (decision 66).
+  - format: json
+    location: /var/log/modsecurity/audit.log

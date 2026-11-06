@@ -1,0 +1,10 @@
+---
+# fw-ips's log sources for its Wazuh agent (task 1.17, decision 105).
+# nftables drops (FW-DROP, FW-EGRESS, FW-INPUT-DROP) go to the kernel log
+# and OpenVPN logs to its unit, so both already arrive through journald,
+# which the role always collects.
+wazuh_agent_localfiles:
+  # Suricata's EVE output, one JSON object per line: alerts, plus the flow,
+  # TLS and anomaly records the alerts refer to.
+  - format: json
+    location: /var/log/suricata/eve.json
