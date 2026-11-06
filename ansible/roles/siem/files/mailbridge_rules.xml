@@ -1,0 +1,96 @@
+<!-- Managed by Ansible (siem role, task 1.17 PR 3, decision 106).
+     Rules only where Wazuh's own rules decode an event but store no alert
+     (level 0, or the generic 1002 at level 2). Each rule is a child of the
+     built-in parent that already decodes the line, so no new decoders.
+     IDs 100100-100299 are this lab's; Wazuh reserves 100000+ for local rules. -->
+
+<!-- nftables on fw-ips (log prefixes in roles/fw_ips/files/nftables.conf).
+     The kernel decoder sets action to the prefix; Wazuh's children of 4100
+     match the action "DROP" exactly, so they never fire for ours. -->
+<group name="mailbridge,firewall,">
+
+  <rule id="100100" level="5">
+    <if_sid>4100</if_sid>
+    <action>FW-DROP</action>
+    <description>fw-ips dropped a forwarded packet: $(srcip) to $(dstip):$(dstport) $(protocol)</description>
+    <group>firewall_drop,</group>
+  </rule>
+
+  <rule id="100101" level="5">
+    <if_sid>4100</if_sid>
+    <action>FW-INPUT-DROP</action>
+    <description>fw-ips dropped a packet to itself: $(srcip) to port $(dstport) $(protocol)</description>
+    <group>firewall_drop,</group>
+  </rule>
+
+  <!-- Accepted and logged on purpose: a private host's only internet path.
+       Stored, because an SSRF to an allowed 443 destination shows only here. -->
+  <rule id="100102" level="3">
+    <if_sid>4100</if_sid>
+    <action>FW-EGRESS</action>
+    <description>Egress through fw-ips: $(srcip) to $(dstip):$(dstport) $(protocol)</description>
+    <group>firewall_egress,</group>
+  </rule>
+
+  <!-- nftables logs at most 10 drops a second, so 10 in a minute from one
+       address is a scan or a misconfiguration, never background noise. -->
+  <rule id="100103" level="10" frequency="10" timeframe="60">
+    <if_matched_group>firewall_drop</if_matched_group>
+    <same_srcip />
+    <description>fw-ips dropped 10 or more packets from $(srcip) within 60 s: possible scan</description>
+    <mitre>
+      <id>T1046</id>
+    </mitre>
+    <group>firewall_drop,</group>
+  </rule>
+
+</group>
+
+<!-- OpenVPN on fw-ips. Wazuh has rules for logins (81801) and certificate
+     failures (81803) but none for the three ways a session ends. -->
+<group name="mailbridge,openvpn,">
+
+  <rule id="100110" level="3">
+    <if_sid>81800</if_sid>
+    <match>client-instance exiting</match>
+    <description>OpenVPN: client disconnected</description>
+  </rule>
+
+  <rule id="100111" level="3">
+    <if_sid>81800</if_sid>
+    <match>Inactivity timeout</match>
+    <description>OpenVPN: client timed out (no keepalive)</description>
+  </rule>
+
+  <!-- A client that exits hard (SIGINT) sends no exit notice; the server
+       learns only when the same certificate connects again. -->
+  <rule id="100112" level="3">
+    <if_sid>81800</if_sid>
+    <match>will cause previous active sessions by this client to be dropped</match>
+    <description>OpenVPN: client reconnected, its previous session dropped</description>
+  </rule>
+
+</group>
+
+<!-- ModSecurity's audit log on proxy (decision 66: Serial, JSON, ABFHZ).
+     Wazuh's JSON decoder reads every field; without these rules a block
+     lands on the generic 1002 at level 2, which is not stored. -->
+<group name="mailbridge,modsecurity,web,">
+
+  <rule id="100200" level="0">
+    <decoded_as>json</decoded_as>
+    <field name="transaction.producer.modsecurity">^ModSecurity</field>
+    <description>ModSecurity audit log entries grouped</description>
+  </rule>
+
+  <rule id="100201" level="6">
+    <if_sid>100200</if_sid>
+    <field name="transaction.response.http_code">^403$</field>
+    <description>ModSecurity blocked $(transaction.request.method) $(transaction.request.uri) from $(transaction.client_ip)</description>
+    <mitre>
+      <id>T1190</id>
+    </mitre>
+    <group>attack,</group>
+  </rule>
+
+</group>
