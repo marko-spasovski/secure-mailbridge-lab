@@ -1,0 +1,82 @@
+---
+# The Wazuh agent (task 1.17). Runs after the common role, which provides
+# apt over HTTPS, the AWS CLI and fetch-ssm-param, and after siem's play,
+# because the agent enrolls with the manager when it starts.
+- name: Install Wazuh's signing key
+  ansible.builtin.get_url:
+    url: https://packages.wazuh.com/key/GPG-KEY-WAZUH
+    dest: /etc/apt/keyrings/wazuh.asc
+    checksum: sha256:{{ wazuh_gpg_sha256 }}
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Limit the Wazuh repository to the agent
+  ansible.builtin.template:
+    src: wazuh.pref.j2
+    dest: /etc/apt/preferences.d/wazuh.pref
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Add the Wazuh repository
+  ansible.builtin.copy:
+    src: wazuh.sources
+    dest: /etc/apt/sources.list.d/wazuh.sources
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Refresh the package lists
+
+- name: Refresh the package lists for the new repository
+  ansible.builtin.meta: flush_handlers
+
+- name: Install the agent at the pinned version
+  ansible.builtin.apt:
+    name: wazuh-agent={{ wazuh_version }}
+    state: present
+
+- name: Hold the agent package
+  ansible.builtin.dpkg_selections:
+    name: wazuh-agent
+    selection: hold
+
+- name: Install the agent settings
+  ansible.builtin.template:
+    src: ossec.conf.j2
+    dest: /var/ossec/etc/ossec.conf
+    owner: root
+    group: wazuh
+    mode: "0660"
+  notify: Restart the Wazuh agent
+
+# Each host pulls the enrollment password with its own instance role, which
+# may read that one parameter (decision 100).
+- name: Pull the enrollment password from SSM
+  ansible.builtin.command: >-
+    /usr/local/sbin/fetch-ssm-param /siem/agent-enrollment-password
+    /var/ossec/etc/authd.pass 0640
+    {{ 'check' if ansible_check_mode else '' }}
+  register: wazuh_agent_pass_pull
+  changed_when: wazuh_agent_pass_pull.stdout == 'changed'
+  check_mode: false
+
+# fetch-ssm-param writes as root; the agent reads it as group wazuh.
+- name: Let the agent read the enrollment password
+  ansible.builtin.file:
+    path: /var/ossec/etc/authd.pass
+    owner: root
+    group: wazuh
+    mode: "0640"
+
+# Handlers first, so the first start already has the settings (decision 97's
+# lesson: no start followed by an immediate restart).
+- name: Apply agent settings
+  ansible.builtin.meta: flush_handlers
+
+# On its first start the agent enrolls with authd on siem.
+- name: Enable and start the agent
+  ansible.builtin.systemd_service:
+    name: wazuh-agent
+    enabled: true
+    state: started

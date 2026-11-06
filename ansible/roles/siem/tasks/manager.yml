@@ -4,7 +4,7 @@
 - name: Install the manager and Filebeat at the pinned versions
   ansible.builtin.apt:
     name:
-      - wazuh-manager={{ siem_wazuh_version }}
+      - wazuh-manager={{ wazuh_version }}
       - filebeat={{ siem_filebeat_version }}
     state: present
 
@@ -96,6 +96,25 @@
   notify:
     - Restart Filebeat
     - Restart the Wazuh manager
+
+# authd's enrollment password (decision 100): siem reads it with its /siem/*
+# grant; authd reads etc/authd.pass as group wazuh.
+- name: Pull the agent enrollment password from SSM
+  ansible.builtin.command: >-
+    /usr/local/sbin/fetch-ssm-param /siem/agent-enrollment-password
+    /var/ossec/etc/authd.pass 0640
+    {{ 'check' if ansible_check_mode else '' }}
+  register: siem_authd_pass_pull
+  changed_when: siem_authd_pass_pull.stdout == 'changed'
+  check_mode: false
+  notify: Restart the Wazuh manager
+
+- name: Let authd read the enrollment password
+  ansible.builtin.file:
+    path: /var/ossec/etc/authd.pass
+    owner: root
+    group: wazuh
+    mode: "0640"
 
 # Handlers first: on a fresh host the manager's restart is its first start,
 # so it never starts and then restarts while its API is still binding 55000.

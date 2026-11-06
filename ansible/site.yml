@@ -73,3 +73,11 @@
   roles:
     - common
     - siem
+
+# Wazuh agents last: they enroll with siem's manager when they start, so
+# every host's own play and siem's play come first (decision 101).
+- name: Install the Wazuh agents
+  hosts: fw_ips:db:app:proxy
+  become: true
+  roles:
+    - wazuh_agent

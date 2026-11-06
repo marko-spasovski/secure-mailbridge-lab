@@ -1,0 +1,12 @@
+---
+# Wazuh agent on every host except siem (task 1.17, decisions 100, 101).
+# wazuh_version, wazuh_gpg_sha256 and wazuh_manager_ip: group_vars/all.
+
+# The name the agent enrolls under: the host's inventory name without the
+# project prefix, so the dashboard shows fw-ips, db, app and proxy.
+wazuh_agent_name: "{{ inventory_hostname | regex_replace('^mailbridge-lab-', '') }}"
+
+# This host's log sources beyond the package defaults (journald,
+# active-responses.log, dpkg.log), set per group in group_vars (decision
+# 101). Each item: format (a Wazuh log_format) and location.
+wazuh_agent_localfiles: []

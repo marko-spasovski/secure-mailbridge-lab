@@ -1,0 +1,9 @@
+---
+- name: Refresh the package lists
+  ansible.builtin.apt:
+    update_cache: true
+
+- name: Restart the Wazuh agent
+  ansible.builtin.systemd_service:
+    name: wazuh-agent
+    state: restarted

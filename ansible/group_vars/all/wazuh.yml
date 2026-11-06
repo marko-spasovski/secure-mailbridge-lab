@@ -1,0 +1,16 @@
+---
+# Wazuh pins shared by the siem role and the wazuh_agent role, so the
+# manager and its agents can never drift apart (decisions 85, 86, 101).
+# An agent must not be newer than its manager.
+wazuh_version: 4.14.9-1
+
+# Wazuh's apt signing key, pinned by the SHA-256 of the armored file, so a
+# changed key fails the run instead of being trusted (decision 91). Its
+# fingerprint is 0DCF CA55 47B1 9D2A 6099 5060 96B3 EE5F 2911 1145 and it
+# expires 2027-05-15. To update: download it on the laptop, check
+#   gpg --show-keys --with-fingerprint GPG-KEY-WAZUH
+# still shows that fingerprint, and only then copy its SHA-256 here, in a PR.
+wazuh_gpg_sha256: a378ca8dfa6b72122df288f64a0cde54f1cbfa3db9b43e6865cb73def35b5b17
+
+# The manager every agent enrolls with and reports to (siem).
+wazuh_manager_ip: 10.0.5.10
