@@ -1,0 +1,16 @@
+# Managed by Ansible (siem role, decisions 91 and 104). The Wazuh repository
+# may supply only Wazuh's own packages, and each only at the reviewed
+# version. apt takes a version's priority from the first specific record
+# that matches it, else from the general one, so any other version and any
+# other package from this origin gets -1 and can never be installed.
+Package: *
+Pin: origin packages.wazuh.com
+Pin-Priority: -1
+
+Package: wazuh-indexer wazuh-manager wazuh-dashboard
+Pin: version {{ siem_wazuh_version }}
+Pin-Priority: 500
+
+Package: filebeat
+Pin: version {{ siem_filebeat_version }}
+Pin-Priority: 500
