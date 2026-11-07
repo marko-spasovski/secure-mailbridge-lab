@@ -24,6 +24,18 @@ locals {
     { number = 140, protocol = local.tcp, cidr = "${var.fw_private_ip}/32", from = 53, to = 53 },
   ]
 
+  # mon's scrapes (decision 120). 9100 is inside the ephemeral range that
+  # rules 110/120 open for replies, so each scraped subnet allows mon first
+  # and denies everyone else before those rules; replies go back to mon.
+  mon = "${var.mon_private_ip}/32"
+  node_exporter_inbound = [
+    { number = 106, action = "allow", protocol = local.tcp, cidr = local.mon, from = 9100, to = 9100 },
+    { number = 107, action = "deny", protocol = local.tcp, cidr = local.any, from = 9100, to = 9100 },
+  ]
+  replies_to_mon = {
+    number = 170, protocol = local.tcp, cidr = local.mon, from = local.ephemeral.from, to = local.ephemeral.to
+  }
+
   agents_outbound = {
     number = 150, protocol = local.tcp, cidr = var.subnet_cidrs["mgmt"], from = 1514, to = 1515
   }
@@ -40,23 +52,36 @@ locals {
         { number = 140, action = "allow", protocol = local.tcp, cidr = local.any, from = 443, to = 443 },
       ] : [],
     )
-    dmz = [
-      { number = 100, action = "allow", protocol = local.tcp, cidr = var.vpn_pools_cidr, from = 443, to = 443 },
-      merge(local.return_inbound[0], { number = 110, action = "allow" }),
-      merge(local.return_inbound[1], { number = 120, action = "allow" }),
-    ]
-    app = [
-      { number = 100, action = "allow", protocol = local.tcp, cidr = var.subnet_cidrs["dmz"], from = 3000, to = 3000 },
-      { number = 105, action = "deny", protocol = local.tcp, cidr = local.any, from = 3000, to = 3000 },
-      merge(local.return_inbound[0], { number = 110, action = "allow" }),
-      merge(local.return_inbound[1], { number = 120, action = "allow" }),
-    ]
-    data = [
-      { number = 100, action = "allow", protocol = local.tcp, cidr = var.subnet_cidrs["app"], from = 5432, to = 5432 },
-      { number = 105, action = "deny", protocol = local.tcp, cidr = local.any, from = 5432, to = 5432 },
-      merge(local.return_inbound[0], { number = 110, action = "allow" }),
-      merge(local.return_inbound[1], { number = 120, action = "allow" }),
-    ]
+    dmz = concat(
+      [{ number = 100, action = "allow", protocol = local.tcp, cidr = var.vpn_pools_cidr, from = 443, to = 443 }],
+      local.node_exporter_inbound,
+      [
+        merge(local.return_inbound[0], { number = 110, action = "allow" }),
+        merge(local.return_inbound[1], { number = 120, action = "allow" }),
+      ],
+    )
+    app = concat(
+      [
+        { number = 100, action = "allow", protocol = local.tcp, cidr = var.subnet_cidrs["dmz"], from = 3000, to = 3000 },
+        { number = 105, action = "deny", protocol = local.tcp, cidr = local.any, from = 3000, to = 3000 },
+      ],
+      local.node_exporter_inbound,
+      [
+        merge(local.return_inbound[0], { number = 110, action = "allow" }),
+        merge(local.return_inbound[1], { number = 120, action = "allow" }),
+      ],
+    )
+    data = concat(
+      [
+        { number = 100, action = "allow", protocol = local.tcp, cidr = var.subnet_cidrs["app"], from = 5432, to = 5432 },
+        { number = 105, action = "deny", protocol = local.tcp, cidr = local.any, from = 5432, to = 5432 },
+      ],
+      local.node_exporter_inbound,
+      [
+        merge(local.return_inbound[0], { number = 110, action = "allow" }),
+        merge(local.return_inbound[1], { number = 120, action = "allow" }),
+      ],
+    )
     mgmt = [
       { number = 100, action = "allow", protocol = local.tcp, cidr = var.vpc_cidr, from = 1514, to = 1515 },
       { number = 105, action = "deny", protocol = local.tcp, cidr = local.any, from = 1514, to = 1515 },
@@ -85,15 +110,18 @@ locals {
       { number = 100, protocol = local.tcp, cidr = var.subnet_cidrs["app"], from = 3000, to = 3000 },
       local.agents_outbound,
       { number = 160, protocol = local.tcp, cidr = var.vpn_pools_cidr, from = local.ephemeral.from, to = local.ephemeral.to },
+      local.replies_to_mon,
     ])
     app = concat(local.baseline_outbound, [
       { number = 100, protocol = local.tcp, cidr = var.subnet_cidrs["data"], from = 5432, to = 5432 },
       local.agents_outbound,
       { number = 160, protocol = local.tcp, cidr = var.subnet_cidrs["dmz"], from = local.ephemeral.from, to = local.ephemeral.to },
+      local.replies_to_mon,
     ])
     data = concat(local.baseline_outbound, [
       local.agents_outbound,
       { number = 160, protocol = local.tcp, cidr = var.subnet_cidrs["app"], from = local.ephemeral.from, to = local.ephemeral.to },
+      local.replies_to_mon,
     ])
     mgmt = concat(local.baseline_outbound, [
       { number = 160, protocol = local.tcp, cidr = var.vpc_cidr, from = local.ephemeral.from, to = local.ephemeral.to },

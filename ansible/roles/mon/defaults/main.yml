@@ -54,3 +54,13 @@ mon_alertmanager_sha256: 17ee14acd0f6ba6e25a436ff223d9c17ddd5cf484f543ad12f0932e
 # disk is enough: they may be lost at teardown.
 mon_alertmanager_listen: 127.0.0.1:9093
 mon_alertmanager_data_dir: /var/lib/alertmanager
+
+# Every host's node_exporter, scraped by its private address (task 1.23).
+# The host label keeps graphs and alerts readable.
+mon_node_targets:
+  - { host: fw-ips, address: "10.0.1.10:9100" }
+  - { host: proxy, address: "10.0.2.10:9100" }
+  - { host: app, address: "10.0.3.10:9100" }
+  - { host: db, address: "10.0.4.10:9100" }
+  - { host: siem, address: "10.0.5.10:9100" }
+  - { host: mon, address: "10.0.5.20:9100" }

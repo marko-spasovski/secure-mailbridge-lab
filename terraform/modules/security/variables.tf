@@ -52,3 +52,9 @@ variable "subnet_cidrs" {
   description = "Subnet name to CIDR, from the network module."
   type        = map(string)
 }
+
+variable "mon_private_ip" {
+  description = "mon's fixed address: the NACLs admit its scrapes by IP (ARCHITECTURE.md §4, decision 120)."
+  type        = string
+  default     = "10.0.5.20"
+}

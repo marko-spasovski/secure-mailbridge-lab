@@ -16,6 +16,12 @@ locals {
 
   agent_ports = [1514, 1515]
 
+  # Hosts whose node_exporter mon scrapes through their security group
+  # (decision 120). fw-ips's group already admits the VPC; its nftables
+  # input chain decides. mon scrapes itself on its own address, which never
+  # leaves the instance.
+  scraped_groups = { for name, id in local.private_groups : name => id if name != "mon" }
+
   agent_egress = merge([
     for name, id in local.agent_groups : {
       for port in local.agent_ports : "${name}-${port}" => { group_id = id, port = port }
@@ -150,6 +156,17 @@ resource "aws_vpc_security_group_ingress_rule" "mon_grafana" {
   to_port           = 3000
 }
 
+resource "aws_vpc_security_group_ingress_rule" "node_exporter_from_mon" {
+  for_each = local.scraped_groups
+
+  security_group_id            = each.value
+  description                  = "node_exporter from mon"
+  referenced_security_group_id = aws_security_group.mon.id
+  ip_protocol                  = "tcp"
+  from_port                    = 9100
+  to_port                      = 9100
+}
+
 # --- Egress ---
 
 resource "aws_vpc_security_group_egress_rule" "fw_all" {
@@ -232,3 +249,24 @@ resource "aws_vpc_security_group_egress_rule" "app_to_db" {
   from_port                    = 5432
   to_port                      = 5432
 }
+
+resource "aws_vpc_security_group_egress_rule" "mon_to_node_exporter" {
+  for_each = local.scraped_groups
+
+  security_group_id            = aws_security_group.mon.id
+  description                  = "Scrape node_exporter on ${each.key}"
+  referenced_security_group_id = each.value
+  ip_protocol                  = "tcp"
+  from_port                    = 9100
+  to_port                      = 9100
+}
+
+resource "aws_vpc_security_group_egress_rule" "mon_to_fw_node_exporter" {
+  security_group_id = aws_security_group.mon.id
+  description       = "Scrape node_exporter on fw-ips"
+  cidr_ipv4         = "${var.fw_private_ip}/32"
+  ip_protocol       = "tcp"
+  from_port         = 9100
+  to_port           = 9100
+}
+
