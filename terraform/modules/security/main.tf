@@ -8,6 +8,7 @@ locals {
     app   = aws_security_group.app.id
     db    = aws_security_group.db.id
     siem  = aws_security_group.siem.id
+    mon   = aws_security_group.mon.id
   }
 
   # siem is excluded because its agent talks to the manager on the same host.
@@ -54,6 +55,13 @@ resource "aws_security_group" "siem" {
   #checkov:skip=CKV2_AWS_5:Attached by the compute module once it exists (task 1.6).
   name        = "${var.name}-siem"
   description = "siem: Wazuh agents from the VPC, dashboard from admin pool"
+  vpc_id      = var.vpc_id
+}
+
+resource "aws_security_group" "mon" {
+  #checkov:skip=CKV2_AWS_5:Attached by the compute module.
+  name        = "${var.name}-mon"
+  description = "mon: Prometheus and Alertmanager, Grafana from admin pool"
   vpc_id      = var.vpc_id
 }
 
@@ -131,6 +139,15 @@ resource "aws_vpc_security_group_ingress_rule" "siem_dashboard" {
   ip_protocol       = "tcp"
   from_port         = 443
   to_port           = 443
+}
+
+resource "aws_vpc_security_group_ingress_rule" "mon_grafana" {
+  security_group_id = aws_security_group.mon.id
+  description       = "Grafana from admin pool"
+  cidr_ipv4         = var.admin_pool_cidr
+  ip_protocol       = "tcp"
+  from_port         = 3000
+  to_port           = 3000
 }
 
 # --- Egress ---

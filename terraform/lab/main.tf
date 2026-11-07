@@ -44,6 +44,11 @@ module "compute" {
   siem_security_group_id = module.security.security_group_ids["siem"]
   siem_data_volume_id    = data.aws_ebs_volume.wazuh_data.id
   siem_data_volume_az    = data.aws_ebs_volume.wazuh_data.availability_zone
+
+  mon_subnet_id         = module.network.subnet_ids["mgmt"]
+  mon_security_group_id = module.security.security_group_ids["mon"]
+  mon_data_volume_id    = data.aws_ebs_volume.prometheus_data.id
+  mon_data_volume_az    = data.aws_ebs_volume.prometheus_data.availability_zone
 }
 
 # Belongs to the persistent stack (decision 88), so lab only looks it up and
@@ -54,6 +59,16 @@ data "aws_ebs_volume" "wazuh_data" {
   filter {
     name   = "tag:Name"
     values = ["mailbridge-lab-wazuh-data"]
+  }
+}
+
+# Belongs to the persistent stack (decision 109), like the Wazuh volume.
+data "aws_ebs_volume" "prometheus_data" {
+  most_recent = true
+
+  filter {
+    name   = "tag:Name"
+    values = ["mailbridge-lab-prometheus-data"]
   }
 }
 
