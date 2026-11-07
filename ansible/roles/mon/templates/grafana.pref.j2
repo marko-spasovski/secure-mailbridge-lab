@@ -1,0 +1,11 @@
+# {{ ansible_managed }}
+# mon role, decisions 108 and 117. Grafana's repository may supply only the
+# grafana package, and only at the reviewed version; anything else from it
+# gets -1 and can never be installed (the pattern of decisions 91, 104).
+Package: *
+Pin: origin apt.grafana.com
+Pin-Priority: -1
+
+Package: grafana
+Pin: version {{ mon_grafana_version }}
+Pin-Priority: 500

@@ -23,3 +23,21 @@ mon_prometheus_data_dir: /var/lib/prometheus
 # budget is used (decision 109). 7 GB of the 10 GB volume leaves room for the
 # write-ahead log, which the size limit doesn't count, and ext4's reserve.
 mon_prometheus_retention_size: 7GB
+
+# Grafana from its apt repository, pinned by version and held (decisions
+# 108, 117). 13.2 is a patched minor line; .0 releases are avoided.
+mon_grafana_version: 13.2.5
+
+# Grafana's apt signing key, pinned by the SHA-256 of the armored file, like
+# Wazuh's (decision 91). Fingerprint B53A E77B ADB6 30A6 8304 6005 963F A277
+# 1045 8545, expires 2027-08-22. To update: download it on the laptop, check
+#   gpg --show-keys --with-fingerprint gpg.key
+# still shows that fingerprint, and only then copy its SHA-256 here, in a PR.
+mon_grafana_gpg_sha256: 3d4029689bc7e4444ec00abafa07f21e9c812b41f1123ab5bbe6f8c3e3f7ff8c
+
+# Grafana's own certificate, signed on the laptop by the Wazuh root CA
+# (decision 113): SSM name under /mon/certs/ and the file it's written to.
+mon_grafana_tls_dir: /etc/grafana/tls
+mon_grafana_certs:
+  - { param: grafana-cert, file: grafana.pem }
+  - { param: grafana-key, file: grafana-key.pem }
