@@ -1,0 +1,10 @@
+# {{ ansible_managed }}
+# Prometheus on mon (task 1.22). 1.23 adds the exporters on every host.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["{{ mon_prometheus_listen }}"]

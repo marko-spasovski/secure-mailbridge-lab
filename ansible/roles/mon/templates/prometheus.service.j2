@@ -1,0 +1,44 @@
+# {{ ansible_managed }}
+# Prometheus on mon (decisions 108, 109, 114).
+[Unit]
+Description=Prometheus
+Wants=network-online.target
+After=network-online.target
+# Never start on the root disk: without the volume there's no database to
+# write to, rather than a new empty one (decision 109).
+RequiresMountsFor={{ mon_prometheus_data_dir }}
+
+[Service]
+Type=simple
+User=prometheus
+Group=prometheus
+ExecStart=/usr/local/bin/prometheus \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --web.listen-address={{ mon_prometheus_listen }} \
+  --storage.tsdb.path={{ mon_prometheus_data_dir }} \
+  --storage.tsdb.retention.size={{ mon_prometheus_retention_size }}
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+# Prometheus flushes its head block on SIGTERM; give it time.
+TimeoutStopSec=120
+
+# Prometheus needs the network and its data directory, nothing else.
+UMask=0027
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ReadWritePaths={{ mon_prometheus_data_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

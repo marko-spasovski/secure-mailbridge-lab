@@ -81,7 +81,7 @@ Deploy: Terraform (infra) + Ansible (config) · Teardown: `terraform destroy` wh
 | db | t3.micro | 20 GB | PostgreSQL | 1 |
 | siem | t3.large (was t3.medium, decisions 87, 99) | 20 GB, plus a 20 GB data volume from `persistent` (decision 88) | Wazuh 4.14.9 all-in-one: manager, indexer, Filebeat, dashboard (decisions 85, 86) | 1 |
 | vuln | t3.small | 10 GB | OWASP Juice Shop in Docker, from its own ECR repository by digest; exists only with `vuln_enabled` (decisions 67, 69, 74) | 1 (Phase 2) |
-| mon | t3.small | 20 GB, plus a 10 GB data volume in `persistent` (decision 109) | Prometheus and Alertmanager from pinned release tarballs, Grafana from its pinned apt repository (decision 108); alerts to a Discord webhook from SSM (decision 110). Moved into Tier 1, decision 84 | 1 |
+| mon | t3.small | 20 GB, plus a 10 GB data volume in `persistent` (decision 109) | Prometheus and Alertmanager from pinned release tarballs, Grafana from its pinned apt repository (decision 108); alerts to a Discord webhook from SSM (decision 110). Prometheus 3.13 LTS and Alertmanager on 127.0.0.1 only (decisions 114, 116); Grafana on 10.0.5.20:3000 with TLS 1.3 and a certificate from the Wazuh root CA (decision 113), admin password from `/mon/*` (decision 112). Moved into Tier 1, decision 84 | 1 |
 
 All instances: IMDSv2 required · SSM agent (admin access; Ansible uses SSH tunnelled through SSM to sshd on loopback, so port 22 is never open to any network) · unattended security updates · apt over HTTPS (regional Ubuntu mirror, port 80 stays closed) · Wazuh agent · node_exporter.
 
