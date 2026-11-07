@@ -1,0 +1,41 @@
+# {{ ansible_managed }}
+# Alertmanager on mon (decisions 108, 114, 119).
+[Unit]
+Description=Alertmanager
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=alertmanager
+Group=alertmanager
+# --cluster.listen-address= (empty) turns off HA gossip, which otherwise
+# listens on 0.0.0.0:9094, TCP and UDP, without authentication (decision 119).
+ExecStart=/usr/local/bin/alertmanager \
+  --config.file=/etc/alertmanager/alertmanager.yml \
+  --web.listen-address={{ mon_alertmanager_listen }} \
+  --cluster.listen-address= \
+  --storage.path={{ mon_alertmanager_data_dir }}
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+
+# Alertmanager needs the network (Discord, later) and its data directory.
+UMask=0027
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ReadWritePaths={{ mon_alertmanager_data_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

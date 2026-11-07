@@ -1,0 +1,92 @@
+---
+# Alertmanager from the pinned release tarball, run by our own unit
+# (decisions 108, 114, 119), the same pattern as Prometheus.
+
+- name: Create the alertmanager system user
+  ansible.builtin.user:
+    name: alertmanager
+    system: true
+    shell: /usr/sbin/nologin
+    home: "{{ mon_alertmanager_data_dir }}"
+    create_home: false
+
+- name: Give Alertmanager its data directory
+  ansible.builtin.file:
+    path: "{{ mon_alertmanager_data_dir }}"
+    state: directory
+    owner: alertmanager
+    group: alertmanager
+    mode: "0750"
+
+- name: Create the Alertmanager download, install and config directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /var/cache/alertmanager
+    - /opt/alertmanager/{{ mon_alertmanager_version }}
+    - /etc/alertmanager
+
+# get_url refuses the file if the SHA-256 differs from the pinned value, and
+# skips the download when a file with that hash is already there.
+- name: Download the pinned Alertmanager release
+  ansible.builtin.get_url:
+    url: https://github.com/prometheus/alertmanager/releases/download/v{{ mon_alertmanager_version }}/{{ mon_alertmanager_archive }}
+    dest: /var/cache/alertmanager/{{ mon_alertmanager_archive }}
+    checksum: sha256:{{ mon_alertmanager_sha256 }}
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Unpack Alertmanager
+  ansible.builtin.unarchive:
+    src: /var/cache/alertmanager/{{ mon_alertmanager_archive }}
+    dest: /opt/alertmanager/{{ mon_alertmanager_version }}
+    remote_src: true
+    extra_opts: [--strip-components=1]
+    include:
+      - alertmanager-{{ mon_alertmanager_version }}.linux-amd64/alertmanager
+      - alertmanager-{{ mon_alertmanager_version }}.linux-amd64/amtool
+    owner: root
+    group: root
+    creates: /opt/alertmanager/{{ mon_alertmanager_version }}/alertmanager
+
+- name: Link the pinned Alertmanager binaries into the PATH
+  ansible.builtin.file:
+    src: /opt/alertmanager/{{ mon_alertmanager_version }}/{{ item }}
+    dest: /usr/local/bin/{{ item }}
+    state: link
+  loop:
+    - alertmanager
+    - amtool
+  notify: Restart Alertmanager
+
+# amtool checks the rendered file before it replaces the old one.
+- name: Write Alertmanager's config
+  ansible.builtin.template:
+    src: alertmanager.yml.j2
+    dest: /etc/alertmanager/alertmanager.yml
+    owner: root
+    group: alertmanager
+    mode: "0640"
+    validate: /usr/local/bin/amtool check-config %s
+  notify: Reload Alertmanager
+
+- name: Install the Alertmanager unit
+  ansible.builtin.template:
+    src: alertmanager.service.j2
+    dest: /etc/systemd/system/alertmanager.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Alertmanager
+
+- name: Enable and start Alertmanager
+  ansible.builtin.systemd_service:
+    name: alertmanager
+    enabled: true
+    state: started
+    daemon_reload: true

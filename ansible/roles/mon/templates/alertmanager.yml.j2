@@ -1,0 +1,13 @@
+# {{ ansible_managed }}
+# Alertmanager on mon (task 1.22). Until PR 3 adds the Discord receiver
+# (decision 110), every alert goes to "none", which sends nothing: alerts
+# still arrive, are grouped and show in the API, but nobody is notified.
+route:
+  receiver: none
+  group_by: [alertname, instance]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: none

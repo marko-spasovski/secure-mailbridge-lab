@@ -1,10 +1,20 @@
 # {{ ansible_managed }}
-# Prometheus on mon (task 1.22). 1.23 adds the exporters on every host.
+# Prometheus on mon (task 1.22). 1.23 adds the exporters on every host and
+# the alert rules.
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["{{ mon_alertmanager_listen }}"]
 
 scrape_configs:
   - job_name: prometheus
     static_configs:
       - targets: ["{{ mon_prometheus_listen }}"]
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["{{ mon_alertmanager_listen }}"]
