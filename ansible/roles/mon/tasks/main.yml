@@ -1,0 +1,10 @@
+---
+# mon (task 1.22, decisions 108 to 116). Runs after the common role, which
+# provides apt over HTTPS and the AWS CLI. Order: the data volume, then
+# Prometheus, which keeps its database on it. Grafana (PR 2b) and
+# Alertmanager (PR 2c) follow in their own task files.
+- name: Mount the data volume
+  ansible.builtin.import_tasks: volume.yml
+
+- name: Install and configure Prometheus
+  ansible.builtin.import_tasks: prometheus.yml

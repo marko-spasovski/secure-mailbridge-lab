@@ -74,10 +74,27 @@
     - common
     - siem
 
+# Same pattern as db (decision 50). mon's role installs Prometheus, Grafana
+# and Alertmanager (task 1.22).
+- name: Configure mon
+  hosts: mon
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Wait until mon is reachable through SSM
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+
+    - name: Gather facts
+      ansible.builtin.setup:
+  roles:
+    - common
+    - mon
+
 # Wazuh agents last: they enroll with siem's manager when they start, so
 # every host's own play and siem's play come first (decision 101).
 - name: Install the Wazuh agents
-  hosts: fw_ips:db:app:proxy
+  hosts: fw_ips:db:app:proxy:mon
   become: true
   roles:
     - wazuh_agent

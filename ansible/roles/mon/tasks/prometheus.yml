@@ -1,0 +1,99 @@
+---
+# Prometheus from the pinned release tarball, run by our own unit
+# (decisions 108, 116), the same pattern as lego (decision 59).
+
+# Prometheus parses every scraped response, so it runs as its own user and a
+# bug in it can't become root.
+- name: Create the prometheus system user
+  ansible.builtin.user:
+    name: prometheus
+    system: true
+    shell: /usr/sbin/nologin
+    home: "{{ mon_prometheus_data_dir }}"
+    create_home: false
+
+# After the mount, so the ownership is set on the volume's root, not on the
+# directory underneath it.
+- name: Give Prometheus its data directory
+  ansible.builtin.file:
+    path: "{{ mon_prometheus_data_dir }}"
+    state: directory
+    owner: prometheus
+    group: prometheus
+    mode: "0750"
+
+- name: Create the Prometheus download, install and config directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /var/cache/prometheus
+    - /opt/prometheus/{{ mon_prometheus_version }}
+    - /etc/prometheus
+
+# get_url refuses the file if the SHA-256 differs from the pinned value, and
+# skips the download when a file with that hash is already there.
+- name: Download the pinned Prometheus release
+  ansible.builtin.get_url:
+    url: https://github.com/prometheus/prometheus/releases/download/v{{ mon_prometheus_version }}/prometheus-{{ mon_prometheus_version }}.linux-amd64.tar.gz
+    dest: /var/cache/prometheus/prometheus-{{ mon_prometheus_version }}.linux-amd64.tar.gz
+    checksum: sha256:{{ mon_prometheus_sha256 }}
+    owner: root
+    group: root
+    mode: "0644"
+
+# A versioned directory, like lego: an update unpacks next to the old one and
+# only the links move. Only the two binaries; the sample config isn't used.
+- name: Unpack Prometheus
+  ansible.builtin.unarchive:
+    src: /var/cache/prometheus/prometheus-{{ mon_prometheus_version }}.linux-amd64.tar.gz
+    dest: /opt/prometheus/{{ mon_prometheus_version }}
+    remote_src: true
+    extra_opts: [--strip-components=1]
+    include:
+      - prometheus-{{ mon_prometheus_version }}.linux-amd64/prometheus
+      - prometheus-{{ mon_prometheus_version }}.linux-amd64/promtool
+    owner: root
+    group: root
+    creates: /opt/prometheus/{{ mon_prometheus_version }}/prometheus
+
+- name: Link the pinned Prometheus binaries into the PATH
+  ansible.builtin.file:
+    src: /opt/prometheus/{{ mon_prometheus_version }}/{{ item }}
+    dest: /usr/local/bin/{{ item }}
+    state: link
+  loop:
+    - prometheus
+    - promtool
+  notify: Restart Prometheus
+
+# promtool checks the rendered file before it replaces the old one, so a
+# broken config fails the run instead of a reload.
+- name: Write Prometheus's config
+  ansible.builtin.template:
+    src: prometheus.yml.j2
+    dest: /etc/prometheus/prometheus.yml
+    owner: root
+    group: prometheus
+    mode: "0640"
+    validate: /usr/local/bin/promtool check config %s
+  notify: Reload Prometheus
+
+- name: Install the Prometheus unit
+  ansible.builtin.template:
+    src: prometheus.service.j2
+    dest: /etc/systemd/system/prometheus.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Prometheus
+
+- name: Enable and start Prometheus
+  ansible.builtin.systemd_service:
+    name: prometheus
+    enabled: true
+    state: started
+    daemon_reload: true

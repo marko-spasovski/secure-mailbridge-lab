@@ -1,0 +1,25 @@
+---
+# mon: Prometheus, Grafana and Alertmanager (task 1.22, decisions 108 to 116).
+mon_private_ip: 10.0.5.20
+
+# Prometheus, the current LTS line (decision 116): 3.13 is supported until
+# 2027-07-31. To update: download the new linux-amd64 archive on the laptop,
+# check its SHA-256 against the release's sha256sums.txt and only then copy
+# it here, in a PR. The release publishes no signature or attestation.
+mon_prometheus_version: 3.13.5
+mon_prometheus_sha256: 0388822ace519c5a3a8ef556a541ce1b536e21d872f82deded465bd27a5a0699
+
+# Loopback only (decision 114): Grafana on this host is the only client, and
+# Prometheus scrapes outbound.
+mon_prometheus_listen: 127.0.0.1:9090
+
+# The persistent data volume (decision 109), found by its Name tag from the
+# laptop like siem's, and mounted where Prometheus keeps its database.
+mon_data_volume_name: mailbridge-lab-prometheus-data
+mon_data_label: prometheus-data
+mon_prometheus_data_dir: /var/lib/prometheus
+
+# Retention by size only, so history is kept across sessions until the
+# budget is used (decision 109). 7 GB of the 10 GB volume leaves room for the
+# write-ahead log, which the size limit doesn't count, and ext4's reserve.
+mon_prometheus_retention_size: 7GB
