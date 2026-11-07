@@ -112,7 +112,7 @@ All instances: IMDSv2 required · SSM agent (admin access; Ansible uses SSH tunn
 | sg-proxy | TCP 8443 | Marko's public IP /32 — **Juice Shop test windows only** (decision 72) |
 | all | TCP 9100 (node_exporter), 9187 (postgres_exporter on db) | sg-mon |
 
-mon's scrape and probe rules are built with the exporters in 1.23: 9100 in 3a (the rows above, sg-mon egress to each scraped group and to 10.0.1.10, and an nftables input rule on fw-ips; decision 120), 9187 in 3b and 443 to proxy in 3c; Grafana's row, sg-mon's egress and the mgmt NACL's 112/115 are built in 1.22 (decision 111).
+mon's scrape and probe rules are built with the exporters in 1.23: 9100 in 3a (the rows above, sg-mon egress to each scraped group and to 10.0.1.10, and an nftables input rule on fw-ips; decision 120), 9187 in 3b (sg-db from sg-mon, data NACL 108/109; postgres_exporter logs in by peer authentication, decision 124) and 443 to proxy in 3c; Grafana's row, sg-mon's egress and the mgmt NACL's 112/115 are built in 1.22 (decision 111).
 
 **Egress (explicit, stateful replies need no rule):**
 
@@ -139,7 +139,7 @@ Second layer: Network ACLs per subnet mirroring the same flows. Third layer: nft
 | public | 100 UDP 1194 from 0.0.0.0/0 · 110 all from 10.0.0.0/16 · 120 TCP eph from 0.0.0.0/0 · 130 UDP eph from 0.0.0.0/0 | 100 all to 10.0.0.0/16 · 110 TCP 443 to 0.0.0.0/0 · 120 UDP 123 to 0.0.0.0/0 · 130 UDP eph to 0.0.0.0/0 |
 | dmz | 100 TCP 443 from 10.8.0.0/22 · 106 TCP 9100 from 10.0.5.20/32 · 107 deny TCP 9100 from 0.0.0.0/0 · 110 TCP eph from 0.0.0.0/0 · 120 UDP eph from 0.0.0.0/0 | 100 TCP 3000 to 10.0.3.0/24 · baseline · 150 agents · 160 TCP eph to 10.8.0.0/22 · 170 TCP eph to 10.0.5.20/32 |
 | app | 100 TCP 3000 from 10.0.2.0/24 · 105 deny TCP 3000 from 0.0.0.0/0 · 106 TCP 9100 from 10.0.5.20/32 · 107 deny TCP 9100 from 0.0.0.0/0 · 110 TCP eph from 0.0.0.0/0 · 120 UDP eph from 0.0.0.0/0 | 100 TCP 5432 to 10.0.4.0/24 · baseline · 150 agents · 160 TCP eph to 10.0.2.0/24 · 170 TCP eph to 10.0.5.20/32 |
-| data | 100 TCP 5432 from 10.0.3.0/24 · 105 deny TCP 5432 from 0.0.0.0/0 · 106 TCP 9100 from 10.0.5.20/32 · 107 deny TCP 9100 from 0.0.0.0/0 · 110 TCP eph from 0.0.0.0/0 · 120 UDP eph from 0.0.0.0/0 | baseline · 150 agents · 160 TCP eph to 10.0.3.0/24 · 170 TCP eph to 10.0.5.20/32 |
+| data | 100 TCP 5432 from 10.0.3.0/24 · 105 deny TCP 5432 from 0.0.0.0/0 · 106 TCP 9100 from 10.0.5.20/32 · 107 deny TCP 9100 from 0.0.0.0/0 · 108 TCP 9187 from 10.0.5.20/32 · 109 deny TCP 9187 from 0.0.0.0/0 · 110 TCP eph from 0.0.0.0/0 · 120 UDP eph from 0.0.0.0/0 | baseline · 150 agents · 160 TCP eph to 10.0.3.0/24 · 170 TCP eph to 10.0.5.20/32 |
 | mgmt | 100 TCP 1514–1515 from 10.0.0.0/16 · 105 deny TCP 1514–1515 from 0.0.0.0/0 · 110 TCP 443 from 10.8.1.0/24 · 112 TCP 3000 from 10.8.1.0/24 · 115 deny TCP 3000 from 0.0.0.0/0 · 120 TCP eph from 0.0.0.0/0 · 130 UDP eph from 0.0.0.0/0 | baseline · 160 TCP eph to 10.0.0.0/16 · 170 TCP eph to 10.8.1.0/24 |
 
 Baseline outbound: 110 TCP 443 to 0.0.0.0/0 · 120 UDP 123 to 0.0.0.0/0 · 130 UDP 53 and 140 TCP 53 to 10.0.1.10/32. Agents: TCP 1514–1515 to 10.0.5.0/24. A 443 test window also needs inbound TCP 443 and outbound TCP eph to 0.0.0.0/0 on public.

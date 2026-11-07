@@ -64,3 +64,6 @@ mon_node_targets:
   - { host: db, address: "10.0.4.10:9100" }
   - { host: siem, address: "10.0.5.10:9100" }
   - { host: mon, address: "10.0.5.20:9100" }
+
+# postgres_exporter on db (task 1.23, decision 124).
+mon_postgres_target: "10.0.4.10:9187"

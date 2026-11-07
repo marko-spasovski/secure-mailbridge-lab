@@ -167,6 +167,15 @@ resource "aws_vpc_security_group_ingress_rule" "node_exporter_from_mon" {
   to_port                      = 9100
 }
 
+resource "aws_vpc_security_group_ingress_rule" "postgres_exporter_from_mon" {
+  security_group_id            = aws_security_group.db.id
+  description                  = "postgres_exporter from mon"
+  referenced_security_group_id = aws_security_group.mon.id
+  ip_protocol                  = "tcp"
+  from_port                    = 9187
+  to_port                      = 9187
+}
+
 # --- Egress ---
 
 resource "aws_vpc_security_group_egress_rule" "fw_all" {
@@ -270,3 +279,11 @@ resource "aws_vpc_security_group_egress_rule" "mon_to_fw_node_exporter" {
   to_port           = 9100
 }
 
+resource "aws_vpc_security_group_egress_rule" "mon_to_postgres_exporter" {
+  security_group_id            = aws_security_group.mon.id
+  description                  = "Scrape postgres_exporter on db"
+  referenced_security_group_id = aws_security_group.db.id
+  ip_protocol                  = "tcp"
+  from_port                    = 9187
+  to_port                      = 9187
+}

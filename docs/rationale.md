@@ -1547,3 +1547,15 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** More PRs and verification passes.
 
 **Verify.** TASKS 1.23 lists each PR's checks.
+
+## 124. How postgres_exporter logs in (2026-11-08)
+
+**Problem.** postgres_exporter needs a PostgreSQL login to read statistics. Every login so far has used a password from SSM (decisions 47, 52, 54), because the app logs in over the network.
+
+**Options.** A: peer authentication on the local Unix socket: the exporter runs as the OS user `postgres_exporter`, and `pg_hba.conf` maps it to the database role of the same name. B: a password generated in `persistent` and set by `set-db-password`, used over TCP on 127.0.0.1.
+
+**Chosen: A**, approved by Marko. On a Unix socket the kernel reports the connecting process's user to PostgreSQL (`SO_PEERCRED`), so PostgreSQL knows who is calling without being told a secret. The exporter sits on the same host as the database, so there's nothing to generate, store, rotate or leak, the same mechanism the `postgres` admin login already uses. The role is `LOGIN` with every other attribute off and membership in the built-in `pg_monitor`, which reads `pg_stat_*` views and settings but no table, so mail stays out of reach even if the exporter were compromised. The `pg_hba.conf` line names the `postgres` maintenance database only. `stat_statements` stays off (its default), because query texts could contain data. B adds a secret that exists only because of a network hop that isn't there.
+
+**Trade-off accepted.** Anyone who can run a process as the OS user `postgres_exporter` gets its statistics; that already requires root on db.
+
+**Verify (once built).** The `postgres` target is `up` and `pg_up` is 1; `ss -tlnp` shows 9187 on 10.0.4.10 only; `sudo -u postgres_exporter psql -h /var/run/postgresql -d mailbridge` is refused by `pg_hba.conf`; `psql -U postgres_exporter -d postgres` as `ubuntu` fails with `Peer authentication failed`; as `postgres_exporter`, `SELECT` on a Mailbridge table is refused.
