@@ -27,7 +27,7 @@ PostgreSQL · Wazuh · Docker · eu-central-1
 ## How to work with me (this is a learning project)
 - I need to understand and defend every line in interviews and at faculty.
 - Before writing a non-trivial file, explain the approach in a few lines and wait for my OK.
-- **I write the Suricata rules and the core nftables ruleset myself.** You review them and point out mistakes; don't write them for me unless I explicitly ask.
+- **You write the Suricata rules and the nftables ruleset; I review them.** Explain each rule (what it matches, why, what it would miss) so I can defend it, and show me the diff before merging. (Changed 2026-11-08 at my request; until then I wrote them myself.)
 - After each change, tell me how to verify it (command + expected output).
 - Keep changes small: one role, module or rule set per step.
 
