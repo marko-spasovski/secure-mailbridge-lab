@@ -46,6 +46,7 @@ mon_grafana_certs:
 # (decisions 108, 116). Same update rule as Prometheus: check the archive's
 # SHA-256 against the release's sha256sums.txt on the laptop, then a PR.
 mon_alertmanager_version: 0.34.2
+mon_alertmanager_archive: alertmanager-{{ mon_alertmanager_version }}.linux-amd64.tar.gz
 mon_alertmanager_sha256: 17ee14acd0f6ba6e25a436ff223d9c17ddd5cf484f543ad12f0932eaa89ba186
 
 # Loopback only (decision 114); its HA cluster port is switched off in the

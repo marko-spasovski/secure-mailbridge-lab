@@ -34,8 +34,8 @@
 # skips the download when a file with that hash is already there.
 - name: Download the pinned Alertmanager release
   ansible.builtin.get_url:
-    url: https://github.com/prometheus/alertmanager/releases/download/v{{ mon_alertmanager_version }}/alertmanager-{{ mon_alertmanager_version }}.linux-amd64.tar.gz
-    dest: /var/cache/alertmanager/alertmanager-{{ mon_alertmanager_version }}.linux-amd64.tar.gz
+    url: https://github.com/prometheus/alertmanager/releases/download/v{{ mon_alertmanager_version }}/{{ mon_alertmanager_archive }}
+    dest: /var/cache/alertmanager/{{ mon_alertmanager_archive }}
     checksum: sha256:{{ mon_alertmanager_sha256 }}
     owner: root
     group: root
@@ -43,7 +43,7 @@
 
 - name: Unpack Alertmanager
   ansible.builtin.unarchive:
-    src: /var/cache/alertmanager/alertmanager-{{ mon_alertmanager_version }}.linux-amd64.tar.gz
+    src: /var/cache/alertmanager/{{ mon_alertmanager_archive }}
     dest: /opt/alertmanager/{{ mon_alertmanager_version }}
     remote_src: true
     extra_opts: [--strip-components=1]
