@@ -41,3 +41,15 @@ mon_grafana_tls_dir: /etc/grafana/tls
 mon_grafana_certs:
   - { param: grafana-cert, file: grafana.pem }
   - { param: grafana-key, file: grafana-key.pem }
+
+# Alertmanager, which has no LTS line, pinned to the newest release
+# (decisions 108, 116). Same update rule as Prometheus: check the archive's
+# SHA-256 against the release's sha256sums.txt on the laptop, then a PR.
+mon_alertmanager_version: 0.34.2
+mon_alertmanager_sha256: 17ee14acd0f6ba6e25a436ff223d9c17ddd5cf484f543ad12f0932eaa89ba186
+
+# Loopback only (decision 114); its HA cluster port is switched off in the
+# unit (decision 119). Silences and the notification log only, so the root
+# disk is enough: they may be lost at teardown.
+mon_alertmanager_listen: 127.0.0.1:9093
+mon_alertmanager_data_dir: /var/lib/alertmanager

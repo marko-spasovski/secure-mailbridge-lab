@@ -1487,3 +1487,15 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** The password lives in a file on mon, readable by root and the grafana group. This is the same accepted cost as the plugin's `wazuh.yml` (decision 98), and whoever controls the grafana process can already change the admin password in its own database. The file is written by `fetch-ssm-param`, so it never passes through the laptop or Ansible's output.
 
 **Verify (once built).** `stat -c '%a %U %G' /etc/grafana/admin-password` shows `640 root grafana`; from the admin pool `admin:admin` gets 401 and the SSM password gets 200 on `/api/user`; the helper prints `unchanged` on the first and second run.
+
+## 119. Alertmanager without cluster mode, state on the root disk (2026-11-07)
+
+**Problem.** Alertmanager is built for high availability: by default it starts a gossip listener on `0.0.0.0:9094`, TCP and UDP, to share silences and notification state with peers. Decision 114 put its web port on loopback, but that flag doesn't touch the cluster port. It also needs a directory for its state, and mon has a root disk that disappears at teardown and a persistent volume that belongs to Prometheus.
+
+**Options.** A: `--cluster.listen-address=` (empty, the documented way to disable it) and state on the root disk. B: cluster on, bound to 127.0.0.1. C: state on the persistent volume as well.
+
+**Chosen: A**, approved by Marko. There is one Alertmanager and no peers, so the cluster has nothing to do; switching it off removes the listener instead of narrowing it, and found during the build, from `alertmanager --help`, before any host ran it. B keeps a gossip port that serves no purpose. The state is only silences and the notification log: losing them at teardown means a silence must be set again in a new session, while the metric history that matters lives in Prometheus on its volume. C would mix two services' data on one filesystem and make Prometheus's retention-by-size share space with something else.
+
+**Trade-off accepted.** Silences don't survive a teardown, and adding a second Alertmanager later means turning the cluster back on with authentication or TLS.
+
+**Verify (once built).** `ss -tulnp` on mon shows Alertmanager only on `127.0.0.1:9093` and nothing on 9094 over TCP or UDP; Prometheus's `/api/v1/alertmanagers` lists `127.0.0.1:9093` as active; the `alertmanager` scrape target is `up`. Tested locally first with the release binary and the unit's flags: only `tcp 127.0.0.1:19093` listened.
