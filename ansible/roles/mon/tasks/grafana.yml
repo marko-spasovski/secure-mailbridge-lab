@@ -1,0 +1,159 @@
+---
+# Grafana from its apt repository, pinned by version and held (decisions
+# 108, 117), with TLS from the Wazuh root CA (decision 113) and its admin
+# password from SSM (decision 112).
+
+# --- Repository ---------------------------------------------------------------
+
+# get_url refuses the key if its SHA-256 differs from the pinned value; apt
+# reads the armored file directly.
+- name: Install Grafana's signing key
+  ansible.builtin.get_url:
+    url: https://apt.grafana.com/gpg.key
+    dest: /etc/apt/keyrings/grafana.asc
+    checksum: sha256:{{ mon_grafana_gpg_sha256 }}
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Limit the Grafana repository to Grafana at the pinned version
+  ansible.builtin.template:
+    src: grafana.pref.j2
+    dest: /etc/apt/preferences.d/grafana.pref
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Add the Grafana repository
+  ansible.builtin.copy:
+    src: grafana.sources
+    dest: /etc/apt/sources.list.d/grafana.sources
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Refresh the package lists
+
+# The install below needs Grafana's index now, not at the end of the play.
+- name: Refresh the package lists for the new repository
+  ansible.builtin.meta: flush_handlers
+
+- name: Install Grafana at the pinned version
+  ansible.builtin.apt:
+    name: grafana={{ mon_grafana_version }}
+    state: present
+
+# A held package is skipped by unattended-upgrades and apt upgrade; an
+# update is a reviewed PR that changes the pin.
+- name: Hold the Grafana package
+  ansible.builtin.dpkg_selections:
+    name: grafana
+    selection: hold
+
+# --- Secrets from SSM ---------------------------------------------------------
+
+- name: Create Grafana's certificate directory
+  ansible.builtin.file:
+    path: "{{ mon_grafana_tls_dir }}"
+    state: directory
+    owner: root
+    group: grafana
+    mode: "0750"
+
+# The certificate Grafana presents and its key (decision 113). mon never
+# holds the CA key that signed them.
+- name: Pull Grafana's certificate and key from SSM
+  ansible.builtin.command: >-
+    /usr/local/sbin/fetch-ssm-param /mon/certs/{{ item.param }}
+    {{ mon_grafana_tls_dir }}/{{ item.file }} 0640
+    {{ 'check' if ansible_check_mode else '' }}
+  loop: "{{ mon_grafana_certs }}"
+  loop_control:
+    label: "{{ item.file }}"
+  register: mon_grafana_cert_pull
+  changed_when: mon_grafana_cert_pull.stdout == 'changed'
+  check_mode: false
+  notify: Restart Grafana
+
+# Root writes them; Grafana runs as grafana and only reads.
+- name: Let Grafana read its certificate and key
+  ansible.builtin.file:
+    path: "{{ mon_grafana_tls_dir }}/{{ item.file }}"
+    owner: root
+    group: grafana
+    mode: "0640"
+  loop: "{{ mon_grafana_certs }}"
+  loop_control:
+    label: "{{ item.file }}"
+
+# grafana.ini reads it with $__file{}, so the admin user is created with this
+# password at the first start and admin:admin never works (decision 112).
+- name: Pull Grafana's admin password from SSM
+  ansible.builtin.command: >-
+    /usr/local/sbin/fetch-ssm-param /mon/grafana-admin-password
+    /etc/grafana/admin-password 0640
+    {{ 'check' if ansible_check_mode else '' }}
+  register: mon_grafana_password_pull
+  changed_when: mon_grafana_password_pull.stdout == 'changed'
+  check_mode: false
+
+- name: Let Grafana read its admin password
+  ansible.builtin.file:
+    path: /etc/grafana/admin-password
+    owner: root
+    group: grafana
+    mode: "0640"
+
+# --- Settings -----------------------------------------------------------------
+
+# The role owns the whole file, like suricata.yaml (decision 37); everything
+# not set here is Grafana's built-in default.
+- name: Write Grafana's settings
+  ansible.builtin.template:
+    src: grafana.ini.j2
+    dest: /etc/grafana/grafana.ini
+    owner: root
+    group: grafana
+    mode: "0640"
+  notify: Restart Grafana
+
+- name: Provision the Prometheus data source
+  ansible.builtin.template:
+    src: datasource.yml.j2
+    dest: /etc/grafana/provisioning/datasources/prometheus.yml
+    owner: root
+    group: grafana
+    mode: "0640"
+  notify: Restart Grafana
+
+- name: Apply Grafana's settings before it starts
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start Grafana
+  ansible.builtin.systemd_service:
+    name: grafana-server
+    enabled: true
+    state: started
+
+- name: Wait for Grafana
+  ansible.builtin.wait_for:
+    host: "{{ mon_private_ip }}"
+    port: 3000
+    timeout: 300
+
+# Checks the SSM password with a test login and resets it only if it fails,
+# for example after a rotation (decisions 52, 94 pattern).
+- name: Install the Grafana admin password helper
+  ansible.builtin.template:
+    src: set-grafana-admin-password.j2
+    dest: /usr/local/sbin/set-grafana-admin-password
+    owner: root
+    group: root
+    mode: "0755"
+  check_mode: false
+
+- name: Check Grafana's admin password
+  ansible.builtin.command: >-
+    /usr/local/sbin/set-grafana-admin-password {{ 'check' if ansible_check_mode else '' }}
+  register: mon_grafana_admin
+  changed_when: mon_grafana_admin.stdout == 'changed'
+  check_mode: false

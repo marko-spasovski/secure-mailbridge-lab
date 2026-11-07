@@ -1463,3 +1463,27 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** No features after 3.13. The next LTS (mid-2027) will need a planned upgrade with a TSDB compatibility check.
 
 **Verify (once built).** `prometheus --version` prints 3.13.5; changing one digit of the checksum in `defaults` fails the run at the download.
+
+## 117. Which Grafana version (2026-11-07)
+
+**Problem.** Grafana is pinned by version (decision 108), so a version must be chosen and later updated by hand. Grafana patches several minor lines at once (on 2026-10-27 it released 13.3.0, 13.2.5, 13.1.9, 13.0.12 and 12.4.14 together).
+
+**Options.** A: 13.2.5, a minor line on its fifth patch. B: 13.3.0, the newest, 11 days old with no fixes yet.
+
+**Chosen: A**, approved by Marko. The same reasoning as Prometheus's LTS (decision 116) and Wazuh (decision 85): the measuring tool should be stable while the settings under test change, and a `.0` release carries the bugs nobody has reported yet. The repository is handled like Wazuh's: the key pinned by the SHA-256 of the armored file (fingerprint `B53A E77B ADB6 30A6 8304 6005 963F A277 1045 8545`, expires 2027-08-22, checked with `gpg --show-keys` on the laptop), an apt preference that gives every package and version from `apt.grafana.com` priority -1 except `grafana` at 13.2.5, and `dpkg` hold.
+
+**Trade-off accepted.** 13.2 will stop getting patches some months before 13.3; the update is a reviewed PR that changes one version string.
+
+**Verify (once built).** `apt-cache policy grafana` shows 13.2.5 at 500 and every other version at -1; `dpkg -l grafana` shows `hi`; `grafana server -v` prints 13.2.5.
+
+## 118. How Grafana gets its first admin password (2026-11-07)
+
+**Problem.** Grafana creates its `admin` user at the first start with the password `admin`. A helper that sets the real password can only run after that start, which leaves a window, and running the CLI before the first start depends on behaviour that couldn't be tested in time (the test image was still downloading on a slow link).
+
+**Options.** A: write the SSM password to `/etc/grafana/admin-password` (`0640 root:grafana`) and point `admin_password` at it with Grafana's `$__file{}` expansion, so the first start creates `admin` with the real password; the helper then only verifies it with a test login and resets through the CLI if it ever differs. B: start Grafana and reset the password straight after, accepting a few seconds of `admin:admin`. C: put the password in `grafana.ini` itself.
+
+**Chosen: A**, a refinement of decision 112 proposed by Claude during the build and approved by Marko. There's never a moment with the public default password, and the result doesn't depend on the order of a start and a reset. The helper still makes the role converge after a rotation: change the SSM value, and the next run's test login fails and the CLI resets it. B leaves a short window, reachable only from the admin pool, but a window. C mixes a secret into a settings file the role templates from the laptop.
+
+**Trade-off accepted.** The password lives in a file on mon, readable by root and the grafana group. This is the same accepted cost as the plugin's `wazuh.yml` (decision 98), and whoever controls the grafana process can already change the admin password in its own database. The file is written by `fetch-ssm-param`, so it never passes through the laptop or Ansible's output.
+
+**Verify (once built).** `stat -c '%a %U %G' /etc/grafana/admin-password` shows `640 root grafana`; from the admin pool `admin:admin` gets 401 and the SSM password gets 200 on `/api/user`; the helper prints `unchanged` on the first and second run.

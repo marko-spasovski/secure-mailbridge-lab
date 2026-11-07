@@ -1,0 +1,13 @@
+# {{ ansible_managed }}
+# Grafana's only data source: Prometheus on this host's loopback (decision
+# 114). Provisioned, so it can't be edited in the UI and drift from the repo.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://{{ mon_prometheus_listen }}
+    isDefault: true
+    editable: false

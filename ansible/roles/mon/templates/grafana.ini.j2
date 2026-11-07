@@ -1,0 +1,45 @@
+; {{ ansible_managed }}
+; Grafana on mon (decisions 108, 112 to 114, 117). Everything not set here is
+; the default from /usr/share/grafana/conf/defaults.ini.
+
+[server]
+; TLS 1.3 only on mon's own address (decision 113); the admin's browser is
+; the only client, as for the Wazuh dashboard (decision 98).
+protocol = https
+http_addr = {{ mon_private_ip }}
+http_port = 3000
+cert_file = {{ mon_grafana_tls_dir }}/grafana.pem
+cert_key = {{ mon_grafana_tls_dir }}/grafana-key.pem
+min_tls_version = TLS1.3
+root_url = https://{{ mon_private_ip }}:3000/
+
+[security]
+; Used only when the admin user is first created; the helper keeps it in
+; step with SSM afterwards (decision 112).
+admin_user = admin
+admin_password = $__file{/etc/grafana/admin-password}
+cookie_secure = true
+cookie_samesite = strict
+disable_gravatar = true
+
+[users]
+allow_sign_up = false
+allow_org_create = false
+
+[auth.anonymous]
+enabled = false
+
+; No calls home: usage reports, update checks and news are off, so mon's only
+; outbound traffic is what the role does (apt, SSM).
+[analytics]
+reporting_enabled = false
+check_for_updates = false
+check_for_plugin_updates = false
+feedback_links_enabled = false
+
+[news]
+news_feed_enabled = false
+
+[plugins]
+; Don't download Grafana's default plugin set from grafana.com at start.
+preinstall_disabled = true

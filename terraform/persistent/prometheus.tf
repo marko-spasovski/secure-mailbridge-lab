@@ -22,3 +22,20 @@ resource "aws_ebs_volume" "prometheus_data" {
     prevent_destroy = true
   }
 }
+
+# Grafana's local admin password (decision 112). Letters and digits only,
+# like the DB passwords; mon reads /mon/* and the mon role's helper sets it
+# with a test login first, so it's idempotent.
+ephemeral "random_password" "grafana_admin" {
+  length  = 40
+  special = false
+}
+
+resource "aws_ssm_parameter" "grafana_admin" {
+  #checkov:skip=CKV_AWS_337:The AWS-managed aws/ssm key, as for /mailbridge/db-password.
+  name             = "/mon/grafana-admin-password"
+  description      = "Grafana local admin password, read by mon"
+  type             = "SecureString"
+  value_wo         = ephemeral.random_password.grafana_admin.result
+  value_wo_version = 1
+}

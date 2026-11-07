@@ -99,3 +99,53 @@ ls wazuh-certificates                                  # expect root-ca.pem plus
 `-wi`, `-ws`, `-wd` and `-a` re-sign the indexer, server, dashboard and admin
 certificates. The root CA itself expires on the same day; replacing it means
 re-signing everything and trusting the new CA in the browser again.
+
+## Other certificates signed by this CA (decision 113)
+
+The Wazuh root CA is also the lab's internal CA for management web UIs, so
+the browser that already trusts it for the dashboard trusts these too. They
+are signed with plain `openssl`, because `wazuh-certs-tool` only knows
+Wazuh's components. Same rules as above: the CA key is decrypted only into a
+temporary file and shredded, keys never leave `~/mailbridge-pki/`, and SSM
+gets each file without `--overwrite`.
+
+| SSM parameter | Type | File | Used by |
+|---|---|---|---|
+| `/mon/certs/grafana-cert` | String | `mon-certificates/grafana.pem` | Grafana on mon, 10.0.5.20:3000 |
+| `/mon/certs/grafana-key` | SecureString | `mon-certificates/grafana-key.pem` | Grafana on mon |
+
+mon's role reads `/mon/*` only (decision 112). Grafana certificate: RSA 2048,
+SHA-256, SAN `IP:10.0.5.20`, 825 days (browsers refuse longer server
+certificates from a CA they were told to trust), `serverAuth` only.
+
+```sh
+cd ~/mailbridge-pki/wazuh; umask 077; mkdir -p mon-certificates
+openssl pkey -in root-ca.key.enc -passin file:ca-passphrase -out tmp-ca.key
+printf '%s\n' 'basicConstraints=critical,CA:FALSE' \
+  'keyUsage=critical,digitalSignature,keyEncipherment' \
+  'extendedKeyUsage=serverAuth' 'subjectAltName=IP:10.0.5.20' > mon-certificates/grafana.ext
+openssl req -new -newkey rsa:2048 -nodes -subj '/O=mailbridge-lab/CN=grafana' \
+  -keyout mon-certificates/grafana-key.pem -out mon-certificates/grafana.csr
+openssl x509 -req -in mon-certificates/grafana.csr -sha256 -days 825 \
+  -CA wazuh-certificates/root-ca.pem -CAkey tmp-ca.key \
+  -set_serial 0x$(openssl rand -hex 16) \
+  -extfile mon-certificates/grafana.ext -out mon-certificates/grafana.pem
+shred -u tmp-ca.key
+```
+
+Verify, then store:
+
+```sh
+openssl verify -CAfile wazuh-certificates/root-ca.pem mon-certificates/grafana.pem
+# expect "mon-certificates/grafana.pem: OK"
+openssl x509 -in mon-certificates/grafana.pem -noout -ext subjectAltName,extendedKeyUsage -enddate
+# expect "IP Address:10.0.5.20", "TLS Web Server Authentication", notAfter 825 days out
+cmp <(openssl x509 -in mon-certificates/grafana.pem -noout -pubkey) \
+    <(openssl pkey -in mon-certificates/grafana-key.pem -pubout) && echo key matches
+aws ssm put-parameter --type String --name /mon/certs/grafana-cert --value file://mon-certificates/grafana.pem
+aws ssm put-parameter --type SecureString --name /mon/certs/grafana-key --value file://mon-certificates/grafana-key.pem
+```
+
+To renew: the same commands with a new key; `put-parameter --overwrite` for
+both values, and the next `site.yml` run restarts Grafana. 1.23's
+certificate-expiry alert covers it.

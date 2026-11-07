@@ -4,13 +4,31 @@
 
 resource "aws_iam_role" "mon" {
   name               = "${var.name}-mon"
-  description        = "mon instance role: SSM agent and the Wazuh enrollment password"
+  description        = "mon instance role: SSM agent, the Wazuh enrollment password and /mon/* only"
   assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
 }
 
 resource "aws_iam_role_policy_attachment" "mon_ssm_min" {
   role       = aws_iam_role.mon.name
   policy_arn = aws_iam_policy.ssm_min.arn
+}
+
+# mon's own secrets (decision 112): Grafana's admin password and certificate,
+# later the Discord webhook URL. Only this path; account and region named, as
+# in decision 43. Nothing else may ever be stored under /mon/.
+data "aws_iam_policy_document" "mon_params" {
+  statement {
+    sid       = "ReadMonParameters"
+    effect    = "Allow"
+    actions   = ["ssm:GetParameter"]
+    resources = ["arn:aws:ssm:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:parameter/mon/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "mon_params" {
+  name   = "mon-read-mon-parameters"
+  role   = aws_iam_role.mon.id
+  policy = data.aws_iam_policy_document.mon_params.json
 }
 
 resource "aws_iam_instance_profile" "mon" {
