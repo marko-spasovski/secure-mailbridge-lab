@@ -65,6 +65,24 @@
   become: true
   become_user: postgres
 
+# postgres_exporter's role (decision 124): statistics only, through the
+# built-in pg_monitor; it can't read any table. No password: it logs in by
+# peer authentication on the socket (pg_hba.conf).
+- name: Create the postgres_exporter role
+  community.postgresql.postgresql_user:
+    name: postgres_exporter
+    role_attr_flags: LOGIN,NOSUPERUSER,NOCREATEDB,NOCREATEROLE,NOREPLICATION
+  become: true
+  become_user: postgres
+
+- name: Give postgres_exporter the pg_monitor role
+  community.postgresql.postgresql_membership:
+    groups: [pg_monitor]
+    target_roles: [postgres_exporter]
+    state: present
+  become: true
+  become_user: postgres
+
 # Installed even in check mode, so the task below can compare.
 - name: Install the password helper
   ansible.builtin.copy:

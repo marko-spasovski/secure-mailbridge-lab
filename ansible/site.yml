@@ -25,6 +25,7 @@
   roles:
     - common
     - db
+    - postgres_exporter
 
 # Same pattern as db (decision 50).
 - name: Configure app

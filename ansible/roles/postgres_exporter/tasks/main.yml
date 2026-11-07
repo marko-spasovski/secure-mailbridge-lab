@@ -1,0 +1,69 @@
+---
+# postgres_exporter from the pinned release tarball (task 1.23, decisions
+# 120, 124). Runs after the db role, which creates its database role and
+# its pg_hba.conf line.
+
+# The OS user's name must match the database role: peer authentication
+# maps one to the other.
+- name: Create the postgres_exporter system user
+  ansible.builtin.user:
+    name: postgres_exporter
+    system: true
+    shell: /usr/sbin/nologin
+    home: /nonexistent
+    create_home: false
+
+- name: Create the postgres_exporter download and install directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /var/cache/postgres_exporter
+    - /opt/postgres_exporter/{{ postgres_exporter_version }}
+
+- name: Download the pinned postgres_exporter release
+  ansible.builtin.get_url:
+    url: https://github.com/prometheus-community/postgres_exporter/releases/download/v{{ postgres_exporter_version }}/{{ postgres_exporter_archive }}
+    dest: /var/cache/postgres_exporter/{{ postgres_exporter_archive }}
+    checksum: sha256:{{ postgres_exporter_sha256 }}
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Unpack postgres_exporter
+  ansible.builtin.unarchive:
+    src: /var/cache/postgres_exporter/{{ postgres_exporter_archive }}
+    dest: /opt/postgres_exporter/{{ postgres_exporter_version }}
+    remote_src: true
+    extra_opts: [--strip-components=1]
+    include:
+      - postgres_exporter-{{ postgres_exporter_version }}.linux-amd64/postgres_exporter
+    owner: root
+    group: root
+    creates: /opt/postgres_exporter/{{ postgres_exporter_version }}/postgres_exporter
+
+- name: Link the pinned postgres_exporter into the PATH
+  ansible.builtin.file:
+    src: /opt/postgres_exporter/{{ postgres_exporter_version }}/postgres_exporter
+    dest: /usr/local/bin/postgres_exporter
+    state: link
+  notify: Restart postgres_exporter
+
+- name: Install the postgres_exporter unit
+  ansible.builtin.template:
+    src: postgres_exporter.service.j2
+    dest: /etc/systemd/system/postgres_exporter.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart postgres_exporter
+
+- name: Enable and start postgres_exporter
+  ansible.builtin.systemd_service:
+    name: postgres_exporter
+    enabled: true
+    state: started
+    daemon_reload: true

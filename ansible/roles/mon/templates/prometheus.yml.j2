@@ -26,3 +26,9 @@ scrape_configs:
         labels:
           host: {{ t.host }}
 {% endfor %}
+
+  - job_name: postgres
+    static_configs:
+      - targets: ["{{ mon_postgres_target }}"]
+        labels:
+          host: db

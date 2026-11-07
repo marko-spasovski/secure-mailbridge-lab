@@ -77,6 +77,11 @@ locals {
         { number = 105, action = "deny", protocol = local.tcp, cidr = local.any, from = 5432, to = 5432 },
       ],
       local.node_exporter_inbound,
+      # postgres_exporter (decision 124), the same pattern as 9100.
+      [
+        { number = 108, action = "allow", protocol = local.tcp, cidr = local.mon, from = 9187, to = 9187 },
+        { number = 109, action = "deny", protocol = local.tcp, cidr = local.any, from = 9187, to = 9187 },
+      ],
       [
         merge(local.return_inbound[0], { number = 110, action = "allow" }),
         merge(local.return_inbound[1], { number = 120, action = "allow" }),
