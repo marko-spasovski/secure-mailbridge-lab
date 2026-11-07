@@ -148,3 +148,35 @@ variable "siem_data_volume_az" {
   description = "Availability Zone of the Wazuh data volume, checked against the siem host's."
   type        = string
 }
+
+variable "mon_instance_type" {
+  description = "mon instance type (ARCHITECTURE.md §3)."
+  type        = string
+  default     = "t3.small"
+}
+
+variable "mon_subnet_id" {
+  description = "mgmt subnet from the network module."
+  type        = string
+}
+
+variable "mon_private_ip" {
+  description = "mon's fixed address, which the admin pool's Grafana access and the scrape rules of §4 use."
+  type        = string
+  default     = "10.0.5.20"
+}
+
+variable "mon_security_group_id" {
+  description = "sg-mon from the security module."
+  type        = string
+}
+
+variable "mon_data_volume_id" {
+  description = "The Prometheus data volume from the persistent stack (decision 109)."
+  type        = string
+}
+
+variable "mon_data_volume_az" {
+  description = "Availability Zone of the Prometheus data volume, checked against the mon host's."
+  type        = string
+}

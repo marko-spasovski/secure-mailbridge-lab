@@ -10,7 +10,8 @@ locals {
   ephemeral = { from = 1024, to = 65535 }
 
   # Replies from the internet can come from anywhere, so this range must be open.
-  # It includes service ports, which is why app, data and mgmt deny them at 105.
+  # It includes service ports, which is why app, data and mgmt deny them first
+  # (105, and 115 for Grafana on mgmt).
   return_inbound = [
     { protocol = local.tcp, cidr = local.any, from = local.ephemeral.from, to = local.ephemeral.to },
     { protocol = local.udp, cidr = local.any, from = local.ephemeral.from, to = local.ephemeral.to },
@@ -60,6 +61,9 @@ locals {
       { number = 100, action = "allow", protocol = local.tcp, cidr = var.vpc_cidr, from = 1514, to = 1515 },
       { number = 105, action = "deny", protocol = local.tcp, cidr = local.any, from = 1514, to = 1515 },
       { number = 110, action = "allow", protocol = local.tcp, cidr = var.admin_pool_cidr, from = 443, to = 443 },
+      # Grafana: 3000 is inside the ephemeral range that 120 opens to everyone.
+      { number = 112, action = "allow", protocol = local.tcp, cidr = var.admin_pool_cidr, from = 3000, to = 3000 },
+      { number = 115, action = "deny", protocol = local.tcp, cidr = local.any, from = 3000, to = 3000 },
       merge(local.return_inbound[0], { number = 120, action = "allow" }),
       merge(local.return_inbound[1], { number = 130, action = "allow" }),
     ]

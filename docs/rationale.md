@@ -1391,3 +1391,15 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** Alerts depend on a third-party service, and a leaked URL lets someone post fake alerts (it can't read anything). The URL can be rotated in Discord in seconds.
 
 **Verify (once built).** The IAM simulator allows mon on the webhook parameter only. A forced test alert (stop a node_exporter) reaches the channel within the group wait and clears when the exporter starts. `ps` and the journal never show the URL.
+
+## 111. mon's network rules in the first Terraform PR (2026-11-07)
+
+**Problem.** §4 gave sg-mon only an inbound row (Grafana, TCP 3000 from the admin pool). Security group egress is explicit in this lab, so a group with no egress rules can't start any connection: mon couldn't reach SSM, apt, Grafana's repository or Discord. The mgmt NACL had no row for 3000 at all, and the scrape and probe paths in §4 (9100 and 9187 on every host, 443 from 10.0.5.20 to proxy) had no NACL rows yet.
+
+**Options.** A: in PR 1, give sg-mon the private hosts' baseline egress plus the Wazuh agent ports, add an explicit allow and deny for 3000 on the mgmt NACL, and leave the scrape and probe rules for 1.23. B: add every mon rule now, scrapes and probe included. C: copy only the rows §4 already had.
+
+**Chosen: A**, approved by Marko. mon joins `private_groups` in the security module, so it gets exactly the rules proxy, app, db and siem get: TCP 443 and UDP 123 out through fw-ips, DNS to Unbound, and the agent ports to sg-siem. It also joins the enrollment grant (decision 100), because 1.17's rule is that every host feeds Wazuh. The NACL point is subtle. NACLs are stateless, so mgmt's rule 120 allows TCP 1024–65535 from anywhere in order to let replies back in. Port 3000 is inside that range, so rule 120 would also admit a *new* connection to Grafana from any VPC address, for example from a compromised proxy. Rule 112 allows the admin pool and 115 denies everyone else before 120 is reached. This is the same pattern app and data use for 3000 and 5432 at 105. B would add rules nothing can test until exporters exist, and would need NACL rows designed before the exporters are. C leaves mon unable to install anything and Grafana reachable past the NACL.
+
+**Trade-off accepted.** §4 is incomplete for mon until 1.23 adds the scrape and probe rows; TASKS 1.23 lists them. The NACL now has one more pair of rules to keep in step with the security group.
+
+**Verify.** `aws ec2 describe-security-group-rules` for sg-mon shows one ingress rule (3000 from 10.8.1.0/24) and six egress rules. `aws ec2 describe-network-acls` for mgmt shows 112 allow and 115 deny on 3000 before 120. The IAM simulator allows `mailbridge-lab-mon` on `/siem/agent-enrollment-password` and returns `implicitDeny` on `/siem/indexer-admin-password`. Once Grafana runs (PR 2): `curl` to 10.0.5.20:3000 answers from the admin pool and times out from the user pool.
