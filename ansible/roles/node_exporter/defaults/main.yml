@@ -1,0 +1,11 @@
+---
+# node_exporter on every host (task 1.23, decision 120), pinned like
+# Prometheus (decision 108): check the archive's SHA-256 against the
+# release's sha256sums.txt on the laptop, then a PR.
+node_exporter_version: 1.12.1
+node_exporter_archive: node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz
+node_exporter_sha256: b51d8a76aa2a9156a55d501aca6276fae09e262259a5e4e831d2c2222f084e63
+
+# The host's own private address only, never 0.0.0.0: mon is the only
+# client, and sg-*, the NACLs and fw-ips's nftables admit only 10.0.5.20.
+node_exporter_listen: "{{ ansible_default_ipv4.address }}:9100"

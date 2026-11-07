@@ -1499,3 +1499,51 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** Silences don't survive a teardown, and adding a second Alertmanager later means turning the cluster back on with authentication or TLS.
 
 **Verify (once built).** `ss -tulnp` on mon shows Alertmanager only on `127.0.0.1:9093` and nothing on 9094 over TCP or UDP; Prometheus's `/api/v1/alertmanagers` lists `127.0.0.1:9093` as active; the `alertmanager` scrape target is `up`. Tested locally first with the release binary and the unit's flags: only `tcp 127.0.0.1:19093` listened.
+
+## 120. How the exporters are installed and reached (2026-11-08)
+
+**Problem.** 1.23 adds an exporter on every host. Each one is a new listening port on a host that so far listened only where its job required, and each needs a path from mon through the security groups, the NACLs and, for fw-ips, nftables.
+
+**Options.** Install: A, checksum-pinned release tarballs with our own units; B, Ubuntu's `prometheus-node-exporter`. Reach: plain HTTP on the private address, limited by the network layers, or TLS with certificates on every exporter.
+
+**Chosen: A and plain HTTP on the private address**, approved by Marko. A is the pattern of decision 108, so the whole Prometheus stack is reviewed the same way and runs one version everywhere; Ubuntu's package sits in universe, which has community-only security support on 24.04. node_exporter binds to `ansible_default_ipv4.address:9100`, never `0.0.0.0`, and its unit is sandboxed (no capabilities, read-only system). The path is opened layer by layer: SG ingress on proxy, app, db and siem referencing sg-mon, matching egress on sg-mon (and to fw-ips's address); on the NACLs, 9100 is inside the ephemeral range that rules 110/120 open for replies, so dmz, app and data get `106 allow 9100 from 10.0.5.20/32` and `107 deny 9100 from 0.0.0.0/0` before those rules, and `170` outbound for the replies to mon. mgmt needs nothing new: its outbound 160 and inbound 120 already cover the ephemeral ranges. fw-ips's group already admits the VPC, so its nftables input chain decides, and that rule is Marko's to write. TLS would need a certificate per exporter for metrics that hold no secrets.
+
+**Trade-off accepted.** Metrics cross the VPC in clear; anyone already able to sniff inside the VPC learns load and disk figures. A pinned version means manual updates.
+
+**Verify (once built).** Every `node` target `up` in Prometheus; `ss -tlnp` on each host shows 9100 on its private address only; from the admin pool 9100 on app times out (NACL 107, SG); the second run `changed=0`.
+
+## 121. CPU credits through YACE (2026-11-08)
+
+**Problem.** §9 asks for an alert when a t3's CPU credit balance nears zero. The balance is kept by the hypervisor and published only to CloudWatch; the guest OS never sees it.
+
+**Options.** A: YACE (prometheus-community's CloudWatch exporter) on mon reading `CPUCreditBalance`. B: node_exporter's steal time, which rises when the hypervisor throttles. C: CloudWatch alarms with SNS email.
+
+**Chosen: A**, approved by Marko. It shows the balance itself, so the alert fires before throttling, which is when it's useful: siem's balance was measured at 2.6 to 8 on 2026-11-05. mon gets read-only `cloudwatch:GetMetricData`, `cloudwatch:ListMetrics` and `tag:GetResources`; these actions can't be limited to resources, so the policy names `*` with a documented checkov skip, and it grants no write. Polling a handful of instances every 5 minutes costs fractions of a cent per session. B reacts only after the credits are gone. C splits alerting across two systems and bills alarms while no hosts exist.
+
+**Trade-off accepted.** One more exporter and a broad-looking, read-only IAM statement; CloudWatch data lags by about 5 minutes.
+
+**Verify (once built).** The IAM simulator allows the three read actions and denies `cloudwatch:PutMetricData`; Prometheus has `aws_ec2_cpucredit_balance` for all six instances.
+
+## 122. One dashboard of our own (2026-11-08)
+
+**Problem.** Grafana starts empty. The Juice Shop block needs host health next to the security layers at a glance.
+
+**Options.** A: one small provisioned dashboard written for the lab. B: a community dashboard such as "Node Exporter Full". C: none until the Juice Shop block.
+
+**Chosen: A**, approved by Marko. A few panels (CPU, memory, disk, network per host, credit balance, probe status, certificate days left) that each answer a question the lab asks, provisioned from the repo so they can't drift. B is about 15,000 lines of JSON nobody here has reviewed. C leaves the stack untested end to end.
+
+**Trade-off accepted.** Fewer panels than a community dashboard; more can be added per need.
+
+**Verify (once built).** The dashboard loads from provisioning, every panel shows data, and it can't be saved over in the UI.
+
+## 123. Splitting 1.23 (2026-11-08)
+
+**Problem.** 1.23 adds four exporters, network rules on every layer, alert rules, a receiver and a dashboard.
+
+**Options.** A: six PRs, 3a node_exporter with its network rules, 3b postgres_exporter, 3c blackbox with proxy's 443 from mon, 3d YACE, 3e alert rules and Discord, 3f the dashboard. B: three larger PRs.
+
+**Chosen: A**, approved by Marko. Each PR adds one thing that is proven by its own target `up`, the CLAUDE.md rule of one role or rule set per step; 3a waits on Marko's nftables rule and 3e on his webhook, without holding up the others.
+
+**Trade-off accepted.** More PRs and verification passes.
+
+**Verify.** TASKS 1.23 lists each PR's checks.
