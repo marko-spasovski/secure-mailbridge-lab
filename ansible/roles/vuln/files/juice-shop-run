@@ -1,0 +1,22 @@
+#!/bin/sh
+# Managed by Ansible (vuln role). Decisions 69, 129. Runs Juice Shop in the
+# foreground, so systemd sees it exit and restarts it.
+. /usr/local/lib/juice-shop/common.sh
+listen=$(cat /etc/juice-shop/listen)
+
+# Mailbridge's hardening (read-only root, no capabilities, no privilege
+# escalation, 512 MB, a minimal init), plus a process limit and a DNS server
+# that routes nowhere (192.0.2.1 is a documentation address).
+# Juice Shop rewrites these folders at every start, so each is an anonymous
+# volume: filled from the image, writable, and deleted with the container
+# (--rm), so every start is a fresh shop and nothing an attack wrote stays.
+exec docker run --rm --name juice-shop \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --memory 512m --pids-limit 256 --init \
+  --dns 192.0.2.1 \
+  -v /juice-shop/data -v /juice-shop/ftp -v /juice-shop/i18n \
+  -v /juice-shop/logs -v /juice-shop/uploads \
+  -v /juice-shop/frontend/dist/frontend -v /juice-shop/.well-known \
+  --tmpfs /tmp:rw,noexec,nosuid,size=64m \
+  -p "$listen:3000" \
+  "$image"

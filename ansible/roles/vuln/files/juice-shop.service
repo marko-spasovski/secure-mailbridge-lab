@@ -1,0 +1,19 @@
+# Managed by Ansible (vuln role). Decisions 69, 129.
+[Unit]
+Description=OWASP Juice Shop
+Requires=docker.service vuln-egress.service
+After=docker.service vuln-egress.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStartPre=/usr/local/sbin/juice-shop-pull
+ExecStart=/usr/local/sbin/juice-shop-run
+# --rm in juice-shop-run removes the container and its anonymous volumes.
+ExecStop=-/usr/bin/docker stop --time 10 juice-shop
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

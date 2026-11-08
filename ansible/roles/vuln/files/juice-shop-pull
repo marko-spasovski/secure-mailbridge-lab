@@ -1,0 +1,4 @@
+#!/bin/sh
+# Managed by Ansible (vuln role). Pulls the pinned image from ECR.
+. /usr/local/lib/juice-shop/common.sh
+exec docker pull --quiet "$image"

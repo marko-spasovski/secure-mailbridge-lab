@@ -92,6 +92,23 @@
     - common
     - mon
 
+# Same pattern as db (decision 50). Only present when vuln_enabled is on
+# (decision 74); with no vuln host this play matches nothing.
+- name: Configure vuln
+  hosts: vuln
+  become: true
+  gather_facts: false
+  pre_tasks:
+    - name: Wait until vuln is reachable through SSM
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+
+    - name: Gather facts
+      ansible.builtin.setup:
+  roles:
+    - common
+    - vuln
+
 # node_exporter on every host, after each host's own play (task 1.23).
 - name: Install node_exporter
   hosts: all
@@ -102,7 +119,7 @@
 # Wazuh agents last: they enroll with siem's manager when they start, so
 # every host's own play and siem's play come first (decision 101).
 - name: Install the Wazuh agents
-  hosts: fw_ips:db:app:proxy:mon
+  hosts: fw_ips:db:app:proxy:mon:vuln
   become: true
   roles:
     - wazuh_agent

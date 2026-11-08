@@ -1,0 +1,153 @@
+---
+# Juice Shop on vuln (task 2.10, decisions 67, 69, 129). Runs after the
+# common role, which provides apt over HTTPS and the AWS CLI. Same pattern
+# as the app role: Docker from Ubuntu, the image pinned by digest and pulled
+# from ECR with the instance role, run by a systemd unit.
+
+- name: Check that the image digest is set
+  ansible.builtin.assert:
+    that: vuln_image_digest is match('^sha256:[0-9a-f]{64}$')
+    fail_msg: Set vuln_image_digest to the digest docker push printed (2.10a).
+    quiet: true
+
+- name: Install Docker and the ECR credential helper
+  ansible.builtin.apt:
+    name:
+      - docker.io
+      - amazon-ecr-credential-helper
+    state: present
+
+# Container output goes to journald, where the Wazuh agent reads it.
+- name: Send container logs to journald
+  ansible.builtin.copy:
+    content: |
+      {
+        "log-driver": "journald"
+      }
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Docker
+
+- name: Enable and start Docker
+  ansible.builtin.systemd_service:
+    name: docker
+    enabled: true
+    state: started
+
+- name: Create root's Docker config directory
+  ansible.builtin.file:
+    path: /root/.docker
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+# No registry password is stored: the helper asks the instance role.
+- name: Use the ECR credential helper
+  ansible.builtin.copy:
+    src: docker-config.json
+    dest: /root/.docker/config.json
+    owner: root
+    group: root
+    mode: "0600"
+
+# --- The container's egress block (decision 69) ------------------------------
+
+- name: Install the egress block script
+  ansible.builtin.copy:
+    src: vuln-egress
+    dest: /usr/local/sbin/vuln-egress
+    owner: root
+    group: root
+    mode: "0750"
+  notify: Restart the egress block
+
+- name: Install the egress block unit
+  ansible.builtin.copy:
+    src: vuln-egress.service
+    dest: /etc/systemd/system/vuln-egress.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart the egress block
+
+- name: Enable and start the egress block
+  ansible.builtin.systemd_service:
+    name: vuln-egress
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# --- Juice Shop --------------------------------------------------------------
+
+- name: Create the Juice Shop config and library directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /etc/juice-shop
+    - /usr/local/lib/juice-shop
+
+- name: Pin the image digest and the listen address
+  ansible.builtin.template:
+    src: "{{ item }}.j2"
+    dest: /etc/juice-shop/{{ item }}
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - image-digest
+    - listen
+  notify: Restart Juice Shop
+
+- name: Install the shared script settings
+  ansible.builtin.copy:
+    src: juice-shop-common.sh
+    dest: /usr/local/lib/juice-shop/common.sh
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Juice Shop
+
+- name: Install the pull and run scripts
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: /usr/local/sbin/{{ item }}
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - juice-shop-pull
+    - juice-shop-run
+  notify: Restart Juice Shop
+
+- name: Install the Juice Shop unit
+  ansible.builtin.copy:
+    src: juice-shop.service
+    dest: /etc/systemd/system/juice-shop.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Juice Shop
+
+- name: Apply changes before Juice Shop starts
+  ansible.builtin.meta: flush_handlers
+
+- name: Enable and start Juice Shop
+  ansible.builtin.systemd_service:
+    name: juice-shop
+    enabled: true
+    state: started
+    daemon_reload: true
+
+# The first start pulls about 120 MB and builds the shop's database.
+- name: Wait for Juice Shop
+  ansible.builtin.wait_for:
+    host: "{{ ansible_default_ipv4.address }}"
+    port: 3000
+    timeout: 600

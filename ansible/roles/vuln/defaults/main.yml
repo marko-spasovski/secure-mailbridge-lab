@@ -1,0 +1,9 @@
+---
+# vuln: OWASP Juice Shop (task 2.10, decisions 67, 69, 129).
+# The amd64 image of bkimminich/juice-shop:v20.3.0, mirrored into ECR by
+# hand from the laptop (2.10a). Docker Hub's index digest was cea5a4af...;
+# this is the single-platform manifest ECR holds. Public value.
+vuln_image_digest: "sha256:590a451634fe564eff575ecb353a0e67ed6b3abef77005b223281663abda867e"
+
+# Published on vuln's own address only; fw-ips and sg-vuln admit proxy alone.
+vuln_listen: "{{ ansible_default_ipv4.address }}:3000"

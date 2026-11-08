@@ -24,7 +24,7 @@ scrape_configs:
 
   - job_name: node
     static_configs:
-{% for t in mon_node_targets %}
+{% for t in mon_node_targets + (mon_vuln_node_targets if groups['vuln'] | default([]) | length > 0 else []) %}
       - targets: ["{{ t.address }}"]
         labels:
           host: {{ t.host }}

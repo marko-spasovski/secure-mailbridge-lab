@@ -1611,3 +1611,15 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** No comparison of ModSecurity modes or paranoia levels, and no request bodies as evidence for Juice Shop; Suricata's ET rules will rarely match proxy → Juice Shop traffic, which is itself a finding about signature IDS inside a network.
 
 **Verify.** ARCHITECTURE and TASKS no longer mention the window, the 8443 listener or the per-server bundles; 2.12's check shows the same SQLi blocked on both servers; 2.15's findings name a layer for every step.
+
+## 130. Juice Shop's container: writable paths and the egress block (2026-11-08)
+
+**Problem.** Decision 69 asked for Mailbridge's container hardening and a `DOCKER-USER` drop. Tested on the laptop, Juice Shop v20.3.0 under `--read-only` exits at start with `EROFS`: it copies files into `ftp`, builds its SQLite database in `data`, and rewrites its built frontend (`index.html`, `assets`) and `.well-known` on every start.
+
+**Options.** A: anonymous volumes on exactly the seven folders it writes, a `noexec` tmpfs on `/tmp`, and the rest read-only. B: drop `--read-only`. C: tmpfs on the folders.
+
+**Chosen: A**, under the approved 2.10 plan. An anonymous volume is created from the image's own contents, so the shipped files are there and writable, and `--rm` deletes it with the container: every start is a fresh shop, so nothing an attack wrote survives a restart, which also makes pentest runs repeatable. B gives an RCE the whole filesystem. C hides the files the image ships in those folders and the app fails. The container also gets `--pids-limit 256` (a fork bomb stays inside) and `--dns 192.0.2.1`, a documentation address that routes nowhere, so it can't resolve names. The `vuln-egress` unit logs and drops every new connection from `docker0` twice: in `DOCKER-USER`, for traffic the host forwards (the internet, the VPC, IMDS), and in its own chain on `INPUT`, because packets addressed to the host itself never pass `DOCKER-USER`, so without it the container could reach node_exporter on the host. Replies to proxy's requests belong to existing connections and pass. With IMDS hop limit 1 the metadata service is out of reach anyway (decision 69).
+
+**Trade-off accepted.** Seven writable folders inside the container: an attacker can change the shop's files until it restarts.
+
+**Verify (once built).** `docker inspect` shows `ReadonlyRootfs: true` and the seven volumes; from inside the container (`node -e` with `http.get`), db, app, the host's 9100, IMDS and the internet all fail, and `journalctl -k` shows `VULN-EGRESS-DROP` for each; proxy gets Juice Shop's page; after a restart, a user registered before is gone.
