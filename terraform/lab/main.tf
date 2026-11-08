@@ -49,6 +49,11 @@ module "compute" {
   mon_security_group_id = module.security.security_group_ids["mon"]
   mon_data_volume_id    = data.aws_ebs_volume.prometheus_data.id
   mon_data_volume_az    = data.aws_ebs_volume.prometheus_data.availability_zone
+
+  vuln_enabled            = var.vuln_enabled
+  vuln_subnet_id          = module.network.subnet_ids["vuln"]
+  vuln_security_group_id  = module.security.security_group_ids["vuln"]
+  vuln_ecr_repository_arn = data.aws_ecr_repository.juice_shop.arn
 }
 
 # Belongs to the persistent stack (decision 88), so lab only looks it up and
@@ -75,6 +80,11 @@ data "aws_ebs_volume" "prometheus_data" {
 # Belongs to the persistent stack (decision 53), so lab only looks it up.
 data "aws_ecr_repository" "mailbridge" {
   name = "mailbridge"
+}
+
+# Belongs to the persistent stack (decision 69), like mailbridge's.
+data "aws_ecr_repository" "juice_shop" {
+  name = "juice-shop"
 }
 
 # The zone belongs to the persistent stack (task 1.2), so lab only looks it up.

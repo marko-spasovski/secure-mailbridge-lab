@@ -180,3 +180,36 @@ variable "mon_data_volume_az" {
   description = "Availability Zone of the Prometheus data volume, checked against the mon host's."
   type        = string
 }
+
+variable "vuln_enabled" {
+  description = "Juice Shop switch (decision 74): the vuln host exists only when this and hosts_enabled are both true."
+  type        = bool
+  default     = false
+}
+
+variable "vuln_instance_type" {
+  description = "vuln instance type (ARCHITECTURE.md §3)."
+  type        = string
+  default     = "t3.small"
+}
+
+variable "vuln_subnet_id" {
+  description = "vuln subnet from the network module."
+  type        = string
+}
+
+variable "vuln_private_ip" {
+  description = "vuln's fixed address, which fw-ips's rules and sg-vuln name (decisions 68, 129)."
+  type        = string
+  default     = "10.0.6.10"
+}
+
+variable "vuln_security_group_id" {
+  description = "sg-vuln from the security module."
+  type        = string
+}
+
+variable "vuln_ecr_repository_arn" {
+  description = "The juice-shop ECR repository from the persistent stack (decision 69)."
+  type        = string
+}

@@ -23,3 +23,9 @@ variable "hosts_enabled" {
   type        = bool
   default     = true
 }
+
+variable "vuln_enabled" {
+  description = "Juice Shop switch (decision 74): plain apply leaves it off; -var vuln_enabled=true adds the vuln host to a session."
+  type        = bool
+  default     = false
+}

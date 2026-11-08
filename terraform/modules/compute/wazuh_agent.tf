@@ -16,6 +16,7 @@ resource "aws_iam_role_policy" "wazuh_agent_enrollment" {
     app    = aws_iam_role.app.id
     proxy  = aws_iam_role.proxy.id
     mon    = aws_iam_role.mon.id
+    vuln   = aws_iam_role.vuln.id
   }
 
   name   = "${each.key}-read-wazuh-enrollment-password"
