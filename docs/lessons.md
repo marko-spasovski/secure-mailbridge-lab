@@ -1275,3 +1275,110 @@ Marko chose the recommended options for `mon`: Prometheus and Alertmanager from 
 ### What comes next
 
 Next session: the routine (expect **9 to add**; the agents now enroll in `site.yml`'s last play), the persistence checks (2026-11-06 index 5,282 alerts with earliest rule 5502 at 20:09:05, certificate `CB:76:56:E8`), then 1.22 PR 1: mon's Terraform. Before 1.23, Marko creates the Discord webhook and stores its URL in SSM.
+
+## 2026-11-08 (session started the evening of 2026-11-07)
+
+### Today's topic: watching the lab, then letting a vulnerable app in without letting it out
+
+This was the longest session so far. It built the health half of the lab (mon, task 1.22, and its exporters and alerts, task 1.23), then most of the Juice Shop host (2.8 to 2.10). Along the way Marko changed three things about the project itself: Claude now writes the firewall and IPS rules and he reviews them; Juice Shop is a regular application instead of a measurement rig (decision 129); and every attack moves to Tier 2 (decision 132). The thread through all of it is one question asked many times: *what does each layer actually see, and how do I prove it?*
+
+### The big picture
+
+Before tonight the lab could say *what happened* (Wazuh: a dropped packet, a blocked request, a login). Now it can also say *how the hosts are doing*: CPU, memory, disk, network, CPU credits, whether mail answers and whether its certificate is close to expiry, with an alert in Discord when something breaks. That's the difference between a SIEM and monitoring: one collects security events, the other measures health, and an incident usually needs both ("ModSecurity blocked 400 requests" and "proxy's CPU sat at 100 % while it did").
+
+The second half added a deliberately vulnerable application without weakening anything else. Juice Shop gets the same defences as Mailbridge, but it lives in its own subnet whose every connection passes through fw-ips, and inside its host the container can't open a single connection of its own. Building it uncovered a routing gap that would have hidden lateral movement from the logs, which is exactly the kind of thing Tier 1 exists to find before Tier 2 attacks.
+
+### Part 1: A firewall rule that's only half the story (decision 111)
+
+ARCHITECTURE §4 listed one row for sg-mon: Grafana, TCP 3000 from the admin pool. Writing the Terraform exposed two gaps. First, the lab writes egress explicitly, so a group with no egress rules can't start any connection: mon couldn't have reached SSM, apt or Discord. mon joined the private hosts' baseline (443, 123, DNS to Unbound, the Wazuh agent ports).
+
+Second, a subtle NACL point worth knowing cold. NACLs are stateless, so mgmt's rule 120 allows TCP 1024–65535 from anywhere in order to let *replies* back in. Port 3000 sits inside that range, so rule 120 would also admit a *new* connection to Grafana from any VPC address. The fix is an allow for the real source (112, admin pool) and a deny for everyone else (115) before 120 is reached: the same reason app and data deny their service ports at 105. A stateful security group doesn't have this problem, because it knows which packets are replies. The same pattern came back for 9100 (node_exporter) and 9187 (postgres_exporter), which are also high ports.
+
+### Part 2: Pinning what you install (decisions 108, 116, 117)
+
+Prometheus and Alertmanager are single Go binaries, so they're installed from the release tarball with the SHA-256 pinned: `get_url` refuses a file whose hash differs. Prometheus publishes only `sha256sums.txt`, no signature or attestation, so the pin proves "this is the file we reviewed", not who built it; the trust comes from GitHub's TLS when the pin was taken. That's why the archive was downloaded and hashed on the laptop first.
+
+Version choice is a stability decision. Prometheus releases a minor version every six weeks and names one a year as **LTS** (3.13, supported to 2027-07-31). The Juice Shop block compares behaviour over weeks, so the measuring tool should stay still: 3.13.5 LTS, not the newest 3.16.0. Grafana patches several minors at once, so the pick was 13.2.5 (fifth patch) rather than 13.3.0 (eleven days old). Grafana comes from its apt repository with the same treatment as Wazuh's: key pinned by hash, the repository limited to one package at one version (`Pin: version`, priority 500, everything else -1), and `dpkg` hold.
+
+### Part 3: Persistent data on a disposable host (decision 109)
+
+mon is destroyed every session, but its metric history mustn't be. The Prometheus data lives on a 10 GB volume in `persistent`, handled exactly like the Wazuh volume: found by its Name tag from the laptop, addressed on the host by the volume ID (`/dev/disk/by-id/...`, because NVMe device numbers change), formatted only when `blkid -p` finds nothing (a disk with history is never reformatted), mounted with `nofail`, and `RequiresMountsFor` in Prometheus's unit, so Prometheus can't start an empty database on the root disk. Retention is by size only (7 GB), so data is kept across sessions until the budget is used. The end-of-session routine now stops Prometheus cleanly before the teardown; its log said `See you next time!`, and next session's first check is that the oldest sample (2026-11-07T21:13:08Z) is still there.
+
+### Part 4: Least privilege for secrets you don't need (decisions 112, 113, 118, 124)
+
+Four small designs, one idea: the best secret is the one that doesn't exist, and the next best never passes through a place it doesn't need to be.
+
+- **Grafana's admin password** is generated by `persistent` into a write-only SSM value, pulled by mon itself, and read by Grafana through `admin_password = $__file{...}` at first start. Grafana's default `admin:admin` therefore never works, not even for the seconds before a helper could change it. A helper still checks it with a test login every run and resets it through the CLI after a rotation. (A container test later showed the CLI can also reset the password before the first start; the file approach was kept because it doesn't depend on that ordering.)
+- **Grafana's TLS** uses a certificate Marko signed on the laptop with the existing Wazuh root CA (SAN `IP:10.0.5.20`, 825 days, `serverAuth`, `CA:FALSE`). The VPN only encrypts laptop → fw-ips; without TLS the login would cross the VPC in clear. The CA key was decrypted into a temporary file and shredded immediately; mon holds the certificate it presents, never the key that signs it.
+- **Prometheus and Alertmanager listen on 127.0.0.1**: Grafana on the same host is their only client, and Prometheus pulls metrics outbound, so nothing needs to connect in.
+- **postgres_exporter has no password at all.** On a Unix socket the kernel tells PostgreSQL which OS user is connecting (`SO_PEERCRED`), so `pg_hba.conf`'s `peer` method can map the OS user `postgres_exporter` to the database role of the same name. The role is a member of the built-in `pg_monitor`, which reads statistics but no table; the test showed it can't even connect to the `mailbridge` database.
+
+### Part 5: Exporters, probes and where the network says no (decisions 120, 125)
+
+Every exporter binds to its host's private address (never `0.0.0.0`), and the 9100 path was opened layer by layer: SG ingress referencing sg-mon, sg-mon egress, NACL allow/deny pairs plus reply rules on dmz, app and data, and an nftables input rule on fw-ips. The negative tests made a good interview answer, because each failure was stopped by a *different* layer: admin pool → app:9100 by nftables `forward`; admin pool → fw-ips:9100 by nftables `input` (logged `FW-INPUT-DROP`); admin pool → mon:9100 by sg-mon; siem → anything:9100 by sg-siem's egress, before the packet ever left siem.
+
+The blackbox probe had a puzzle: mon can't resolve `mail.<domain>`, because private hosts use AmazonProvidedDNS and only Unbound knows the private name. The answer was to probe proxy by address while sending the expected name in SNI and `Host`, which is exactly what a browser does after DNS, and to add a *separate* DNS probe of Unbound. Two probes mean two different failure signatures: stopping Nginx made `https_mail` drop to 0 while `dns_mail` stayed 1. The certificate is verified against the pinned Let's Encrypt staging root, and a negative test with the system store showed `x509: certificate signed by unknown authority`, proving the probe really checks.
+
+### Part 6: Metrics the guest can't see (decision 121)
+
+A t3 with `standard` credits drops to its baseline (20–40 %) when its credit balance hits zero, and the balance exists only in the hypervisor's view, published to CloudWatch. The guest sees only the effect, as **steal time**. YACE reads `CPUCreditBalance` every five minutes (the rate basic monitoring publishes it) with a read-only policy of three actions that AWS only allows on `Resource "*"`. The dashboard puts steal next to the balance, so the cause and the effect are side by side. YACE's labels contain the account ID and instance IDs, which a public repo mustn't show even in a screenshot, so Prometheus drops them at scrape time and keeps a `host` label instead.
+
+### Part 7: Proving alerts work (decision 126)
+
+An alert rule that never fires looks exactly like one that's broken, and most conditions (a full disk, an expiring certificate, zero credits) can't be caused on demand without damaging the lab. `promtool test rules` feeds synthetic time series into the real rule file and checks which alerts fire, when, and with which labels, including that healthy series beside them stay quiet. A **mutation test** proved the tests bite: raising the disk threshold to 95 % and the credit threshold to 3 made both tests fail. The role runs the tests on mon at every deploy, so a threshold can't drift from its test. The live test closed the loop: node_exporter stopped on app at 01:07:28, `TargetDown` fired at 01:09:50 and reached Discord, and it resolved after the restart.
+
+### Part 8: Forcing traffic through the firewall (decisions 68, 127, 131)
+
+The vuln subnet uses a feature worth explaining in any interview: a route **more specific than the VPC's `local` route**. Every VPC route table sends 10.0.0.0/16 to `local`, so subnets normally talk directly and no firewall sees it. Since 2021 AWS allows a route for a whole subnet's CIDR pointing at an appliance; the longest prefix wins, so `10.0.6.0/24 → fw-ips ENI` forces every packet to Juice Shop through nftables and Suricata. `tcpdump` on fw-ips showed proxy's SYNs arriving there and nftables dropping them (before 2.9's rules), while proxy → app never appeared: Mailbridge keeps its direct path.
+
+Two consequences. **Symmetry**: if a request goes through fw-ips and the reply goes direct, conntrack sees half a connection and drops it as invalid, so both route tables must point the same way. **Security groups by address**: after the detour a packet arrives from fw-ips's ENI, so a rule referencing proxy's *group* can never match; every rule on these paths names an IP.
+
+The 2.10 test then found a real gap. vuln → db:443 and app:443 were blocked, but no `FW-DROP` appeared: vuln's table only routed `0.0.0.0/0`, dmz and mgmt through fw-ips, so app and data were still reached over `local` and stopped by *their* NACLs and groups. Nothing got through, but nothing was logged either, and a lateral-movement attempt from Juice Shop would have left a trace only in the flow logs. Two more routes (decision 131) fixed it, and the same test then gave `FW-DROP` for all three destinations. The lesson: "blocked" and "seen" are different properties, and a negative test should check both.
+
+### Part 9: The decision to stop measuring (decision 129)
+
+The original Juice Shop plan was a measurement rig: a separate ModSecurity bundle with its own mode and paranoia level, a matrix of eight configurations, an internet window, and Suricata variables changed so proxy counted as "external" (ET rules mostly match `$EXTERNAL_NET → $HOME_NET`, and on the proxy → Juice Shop path both ends are internal). Testing that variable was instructive: `[!$HOME_NET,10.0.2.10]` is **invalid** in Suricata (you can't add a host back inside a negated range), and would have disabled every rule using it; a computed exclusion list worked; and even with `EXTERNAL_NET: any`, ET Open had no rule for a generic SQL injection on Juice Shop's URLs.
+
+Marko then reframed the goal: pentest Juice Shop as a real shop with real defences, not tuned test settings. What stayed is safety, not measurement: the isolated subnet, the container hardening, the attacker certificate and scope wrapper. The interview point: know which controls exist to *measure* and which exist to *protect*, and don't let the first kind weaken the second.
+
+### Part 10: A hardened container that still runs (decisions 69, 130)
+
+Juice Shop under Mailbridge's flags (`--read-only`, `--cap-drop ALL`, `no-new-privileges`, a memory limit, `--init`) failed at start with `EROFS`: it copies files, builds its SQLite database and rewrites its own frontend every time. Testing on the laptop found the seven folders it writes. A tmpfs would hide the files the image ships there; an **anonymous volume** is filled from the image, writable, and deleted with the container by `--rm`, so every start is a fresh shop and nothing an attacker wrote survives a restart. Added on top: `--pids-limit 256` and `--dns 192.0.2.1`, a documentation address that routes nowhere.
+
+The egress block has two parts, because Docker's `DOCKER-USER` chain only sees traffic the host *forwards*. A packet from the container to the host's own address (its node_exporter, for example) goes to `INPUT` instead, so a second chain on `INPUT` gets the same log-and-drop pair. From inside the container, db, app, the host's 9100, IMDS (also out of reach by the hop limit of 1) and the internet all timed out, each logged as `VULN-EGRESS-DROP`, and DNS failed with `EAI_AGAIN`.
+
+### Mistakes and what they taught
+
+- **Two playbook runs killed by the network.** On the phone hotspot, single tasks stalled for over a minute with nothing on the host's journal, and each stall ended the whole playbook because every play has one host. The same roles ran in 7.5 minutes on a better network. Measure the path before blaming the hosts.
+- **A shared checkout on a feature branch.** Marko's "second run" deployed unmerged code because Claude had left the repo on a branch; it wrote the alert rules and lost Prometheus's reload handler (the decision 103 trap again). Claude now works in separate worktrees.
+- **A secret pasted into chat.** The Discord webhook URL is a bearer secret; once pasted it had to be rotated. The `read -rs … --value file:///dev/stdin` pattern keeps a secret out of history, `ps` and any transcript.
+- **An apostrophe in an AWS description.** `validate`, `plan`, tflint and checkov all passed a security group rule description that the API rejected. The partial apply did no harm, because Terraform records each resource as it's created.
+- **A guard that matched itself.** `pgrep -f ansible-playbook` matched Claude's own command line. Anchoring the pattern to the interpreter fixed it.
+- **A cleanup that was too broad.** `docker volume prune -f` on the laptop removed orphaned anonymous volumes from other projects, not just the test container's. Clean only what you created.
+- **Testing the test.** The first Suricata harness reported zero alerts for everything, including a case that had to alert; a probe rule exposed it. A test that can't fail proves nothing.
+
+### Decisions from this session
+
+111 (mon's network rules), 112 (Grafana's password from `/mon/*`), 113 (Grafana's TLS from the Wazuh CA), 114 (Prometheus and Alertmanager on loopback), 115 (splitting the mon role), 116 (Prometheus 3.13 LTS), 117 (Grafana 13.2.5), 118 (the first admin password through `$__file`), 119 (Alertmanager without cluster mode), 120 (exporter install and the 9100 path), 121 (CPU credits through YACE), 122 (one dashboard of our own), 123 (splitting 1.23), 124 (postgres_exporter by peer authentication), 125 (the blackbox probes), 126 (alert rules and their unit tests), 127 (the vuln network in code), 128 (Claude writes the rules, Marko reviews), 129 (Juice Shop as a regular application), 130 (the container's writable paths and egress block), 131 (every path from vuln through fw-ips), 132 (all attacks in Tier 2), 133 (standard detection only in 2.13).
+
+### Interview questions to practise
+
+1. Why does a stateless NACL need a deny rule for a service port that sits in the ephemeral range, and why doesn't a security group?
+2. What does a SHA-256 pin on a downloaded release prove, and what doesn't it prove?
+3. Why choose an LTS or a mature patch release for a monitoring tool in a lab that compares results over weeks?
+4. How do you keep a metrics database across sessions on a host that's destroyed each time, and what stops it from being reformatted or replaced by an empty one?
+5. Explain peer authentication in PostgreSQL. Why does it need no password, and what does `pg_monitor` allow?
+6. A monitoring host can't resolve your application's private name. How do you still probe the application realistically, and why add a second probe?
+7. Why can't node_exporter see a t3's CPU credit balance? What can it see instead?
+8. How do you prove an alert rule works without causing the condition? What is a mutation test?
+9. Explain a route more specific than the VPC's local route. Why must the return path match, and why must security groups then name addresses?
+10. Your negative test shows a connection blocked but nothing in the firewall log. What could explain it, and why does it matter?
+11. Why did changing Suricata's `EXTERNAL_NET` matter for the proxy → backend path, and what went wrong with the first form of the variable?
+12. Which controls around a deliberately vulnerable application exist to protect, and which only to measure?
+13. How do you run a container read-only when the application writes at start, without losing the files the image ships?
+14. Why doesn't `DOCKER-USER` see a container's connection to its own host, and what else is needed?
+15. Why keep secrets out of chat, shell history and process arguments, and how do you pass one to the AWS CLI safely?
+
+### What comes next
+
+Next session: `Read START.md`, the routine with `-var vuln_enabled=true` (expect **12 to add**), the persistence checks (2026-11-08 index 6,973 alerts with earliest rule 100102 at 00:00:02Z, Prometheus's oldest sample 2026-11-07T21:13:08Z, certificate `CB:76:56:E8`), then 2.11: proxy serves `vuln.<domain>` with its own certificate. Tier 1 then continues with 2.12, 2.13 and the close-out 1.18 to 1.21; all attacks wait for Tier 2.
