@@ -1600,6 +1600,18 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 
 **Verify.** The plan's 31 resources exist; `tcpdump` on fw-ips sees proxy → 10.0.6.10:3000 and nftables logs it as `FW-DROP` (until 2.9); proxy → app traffic is absent from fw-ips's capture; the next plan is clean.
 
+## 128. Who writes the firewall and IPS rules (2026-11-08)
+
+**Problem.** CLAUDE.md said Marko writes the Suricata rules and the core nftables ruleset himself and Claude reviews them. In practice most of them (1.9a to 1.12, decision 79 onwards) had already been written by Claude at his explicit request, and 1.23 and 2.9 needed several more.
+
+**Options.** A: Claude writes them and Marko reviews them, with an explanation per rule. B: keep the old rule and ask for an exception each time.
+
+**Chosen: A**, decided by Marko. The aim of the rule was that Marko can defend every line; a review where each rule comes with what it matches, why, and what it would miss serves that aim, and the diff is shown before merging. The first rules under the new convention (fw-ips's 9100 input rule and the vuln isolation rules) were reviewed this way, each checked with `nft -c` on fw-ips before deployment.
+
+**Trade-off accepted.** Marko practises writing rules less than reviewing them.
+
+**Verify.** CLAUDE.md states the convention; each rule PR shows the diff with per-rule explanations and Marko's approval before merge.
+
 ## 129. Juice Shop as a regular application (2026-11-08)
 
 **Problem.** Decisions 67 to 76 planned Juice Shop as a measurement target: its own ModSecurity bundle with a separate mode and paranoia level, request bodies in its audit log, an eight-configuration matrix, an internet window, and (proposed while building 2.9) Suricata variables changed so proxy counted as external on its path. Testing that last change showed how much special handling this needed: one form of the variable was rejected by Suricata and would have disabled every rule using it, and ET Open had no rule for a generic SQL injection on Juice Shop's URLs anyway.
