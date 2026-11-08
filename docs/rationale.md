@@ -1573,3 +1573,15 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** The HTTPS probe doesn't test name resolution itself, which is why the DNS probe exists. It adds two requests a minute to Nginx's logs.
 
 **Verify (once built).** `probe_success` is 1 for both modules, `probe_http_status_code` 200, `probe_tls_version_info{version="TLS 1.3"}` 1, and the days left from `probe_ssl_earliest_cert_expiry` match `openssl x509 -enddate`. Tested from the laptop in the admin pool first: 200 over TLS 1.3, 63.8 days left, DNS answer matched; the same probe against the system store failed with `x509: certificate signed by unknown authority`.
+
+## 126. The alert rules and how they're proven (2026-11-08)
+
+**Problem.** §9 lists five conditions to alert on. An alert rule that never fires is indistinguishable from one that's broken, and most of these conditions (a full disk, an expiring certificate, credits at zero) can't be produced on demand without damaging the lab.
+
+**Options.** A: `promtool test rules` unit tests with synthetic series for every rule, run on mon in each Ansible run, plus live tests for the conditions that are safe to cause (a stopped exporter, a test alert). B: live tests only. C: no tests; trust the expressions.
+
+**Chosen: A**, approved by Marko. Each test feeds made-up time series into the real rule file and checks the exact alerts and labels at given times: the rule must fire after its `for` period and must stay quiet for the healthy series beside it (a disk at 50 %, a tmpfs at 95 %, 40 credits, 60 days of certificate). A mutation test showed the tests bite: raising the disk threshold to 95 % and the credit threshold to 3 made both fail. The role copies rules and tests to mon and runs the tests on every deploy, so a threshold can't drift from its test. The thresholds: `up == 0` and `probe_success == 0` for 2 minutes (eight missed scrapes, not one); disk over 80 % for 10 minutes on real filesystems (snap squashfs images are always 100 %); certificate under 14 days for an hour (lego renews at 30 days, so this means two weeks of failed renewals); credits under 10 for 15 minutes (siem ran at its 20 % baseline with 2.6–8 on 2026-11-05). Alertmanager uses its native Discord integration with `webhook_url_file`, so the bearer URL lives only in SSM and a `0640 root:alertmanager` file. B can't safely cover three of the five rules. C leaves the alerting untested, which defeats having it.
+
+**Trade-off accepted.** Unit tests prove the rule logic, not the metric pipeline; the live tests and the targets being `up` cover that part.
+
+**Verify (once built).** `promtool test rules` reports `SUCCESS` on mon; stopping node_exporter on app sends `TargetDown` to Discord within about 3 minutes and `RESOLVED` after it starts; an `amtool alert add` test reaches the channel; the URL appears in no log, no `ps` output and no Ansible output.

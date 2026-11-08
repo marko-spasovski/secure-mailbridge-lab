@@ -1,0 +1,53 @@
+# Managed by Ansible (mon role). The lab's alerts (task 1.23, decision 126),
+# the list in ARCHITECTURE.md §9. Each "for" keeps a single missed sample
+# from paging anyone. Unit tests: tests/lab.rules.test.yml (promtool test rules).
+groups:
+  - name: lab
+    rules:
+      # Any scrape target: a host that's down, or an exporter that died.
+      - alert: TargetDown
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} on {{ $labels.host }}{{ $labels.instance }} is not answering"
+
+      # Mail over HTTPS through proxy, or Unbound's answer for mail.
+      - alert: ProbeFailing
+        expr: probe_success == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Probe {{ $labels.module }} of {{ $labels.instance }} is failing"
+
+      # Real filesystems only; tmpfs, squashfs (snaps) and overlay are excluded.
+      - alert: DiskAlmostFull
+        expr: >-
+          (1 - node_filesystem_avail_bytes{fstype!~"tmpfs|squashfs|overlay"}
+               / node_filesystem_size_bytes{fstype!~"tmpfs|squashfs|overlay"}) > 0.80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.mountpoint }} on {{ $labels.host }} is {{ $value | humanizePercentage }} full"
+
+      # lego renews at 30 days left, so this fires only after two weeks of
+      # failed renewals.
+      - alert: CertExpiresSoon
+        expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 < 14
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Certificate of {{ $labels.instance }} expires in {{ $value | humanize }} days"
+
+      # A t3 with standard credits drops to its baseline at 0 (decision 121).
+      - alert: CPUCreditsLow
+        expr: aws_ec2_cpucredit_balance_minimum < 10
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.host }} has {{ $value | humanize }} CPU credits left"

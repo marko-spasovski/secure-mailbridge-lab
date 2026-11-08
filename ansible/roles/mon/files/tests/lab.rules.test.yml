@@ -1,0 +1,100 @@
+# Unit tests for rules/lab.rules.yml (decision 126): synthetic series, each rule
+# shown both firing and staying quiet. Run: promtool test rules <this file>
+rule_files:
+  - ../rules/lab.rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  # TargetDown: down for 3 minutes fires; up stays quiet.
+  - interval: 15s
+    input_series:
+      - series: 'up{job="node", host="app", instance="10.0.3.10:9100"}'
+        values: '0x20'
+      - series: 'up{job="node", host="db", instance="10.0.4.10:9100"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: TargetDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: TargetDown
+        exp_alerts:
+          - exp_labels: { severity: critical, job: node, host: app, instance: "10.0.3.10:9100" }
+            exp_annotations:
+              summary: "node on app10.0.3.10:9100 is not answering"
+
+  # ProbeFailing: 0 for 3 minutes fires.
+  - interval: 15s
+    input_series:
+      - series: 'probe_success{module="https_mail", instance="https://10.0.2.10/healthz"}'
+        values: '0x20'
+      - series: 'probe_success{module="dns_mail", instance="10.0.1.10"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: ProbeFailing
+        exp_alerts:
+          - exp_labels: { severity: critical, module: https_mail, instance: "https://10.0.2.10/healthz" }
+            exp_annotations:
+              summary: "Probe https_mail of https://10.0.2.10/healthz is failing"
+
+  # DiskAlmostFull: 90 % used for 15 minutes fires; 50 % and tmpfs at 95 % don't.
+  - interval: 1m
+    input_series:
+      - series: 'node_filesystem_size_bytes{host="siem", mountpoint="/", fstype="ext4"}'
+        values: '100x20'
+      - series: 'node_filesystem_avail_bytes{host="siem", mountpoint="/", fstype="ext4"}'
+        values: '10x20'
+      - series: 'node_filesystem_size_bytes{host="db", mountpoint="/", fstype="ext4"}'
+        values: '100x20'
+      - series: 'node_filesystem_avail_bytes{host="db", mountpoint="/", fstype="ext4"}'
+        values: '50x20'
+      - series: 'node_filesystem_size_bytes{host="db", mountpoint="/run", fstype="tmpfs"}'
+        values: '100x20'
+      - series: 'node_filesystem_avail_bytes{host="db", mountpoint="/run", fstype="tmpfs"}'
+        values: '5x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: DiskAlmostFull
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: DiskAlmostFull
+        exp_alerts:
+          - exp_labels: { severity: warning, host: siem, mountpoint: /, fstype: ext4 }
+            exp_annotations:
+              summary: "/ on siem is 90% full"
+
+  # CertExpiresSoon: 10 days left fires after an hour; 60 days doesn't.
+  # At eval time t seconds, the expiry is set to t + days * 86400.
+  - interval: 5m
+    input_series:
+      - series: 'probe_ssl_earliest_cert_expiry{instance="https://10.0.2.10/healthz"}'
+        values: '864000+300x20'
+      - series: 'probe_ssl_earliest_cert_expiry{instance="https://10.0.9.9/"}'
+        values: '5184000+300x20'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: CertExpiresSoon
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: CertExpiresSoon
+        exp_alerts:
+          - exp_labels: { severity: warning, instance: "https://10.0.2.10/healthz" }
+            exp_annotations:
+              summary: "Certificate of https://10.0.2.10/healthz expires in 10 days"
+
+  # CPUCreditsLow: 5 credits for 20 minutes fires; 40 doesn't.
+  - interval: 5m
+    input_series:
+      - series: 'aws_ec2_cpucredit_balance_minimum{host="siem"}'
+        values: '5x10'
+      - series: 'aws_ec2_cpucredit_balance_minimum{host="db"}'
+        values: '40x10'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CPUCreditsLow
+        exp_alerts:
+          - exp_labels: { severity: warning, host: siem }
+            exp_annotations:
+              summary: "siem has 5 CPU credits left"
