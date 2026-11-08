@@ -1,13 +1,16 @@
 # {{ ansible_managed }}
-# Alertmanager on mon (task 1.22). Until PR 3 adds the Discord receiver
-# (decision 110), every alert goes to "none", which sends nothing: alerts
-# still arrive, are grouped and show in the API, but nobody is notified.
+# Alertmanager on mon (task 1.23, decisions 110, 126). Every alert goes to
+# Discord. The webhook URL is a bearer secret, so it's read from a file
+# pulled from SSM, never written into this config.
 route:
-  receiver: none
-  group_by: [alertname, instance]
+  receiver: discord
+  group_by: [alertname, host, instance]
   group_wait: 30s
   group_interval: 5m
   repeat_interval: 4h
 
 receivers:
-  - name: none
+  - name: discord
+    discord_configs:
+      - webhook_url_file: {{ mon_discord_webhook_file }}
+        send_resolved: true

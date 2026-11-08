@@ -93,3 +93,8 @@ mon_yace_version: 0.68.0
 mon_yace_archive: yet-another-cloudwatch-exporter-{{ mon_yace_version }}.linux-amd64.tar.gz
 mon_yace_sha256: 2707d24680354bc4922074aaafc76fdeabeec3ba6538b3323d557c4c777d6433
 mon_yace_listen: 127.0.0.1:5000
+
+# Alertmanager's Discord webhook (decision 110), stored by Marko in SSM and
+# pulled by mon; Alertmanager reads it from this file.
+mon_discord_webhook_param: /mon/discord-webhook-url
+mon_discord_webhook_file: /etc/alertmanager/discord-webhook-url

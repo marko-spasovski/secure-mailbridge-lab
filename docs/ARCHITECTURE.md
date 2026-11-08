@@ -221,7 +221,7 @@ The vuln subnet has no rule to data, app or mgmt, so db, Mailbridge and Wazuh's 
 
 **Health (Prometheus/Grafana — "is everything healthy?")** — Tier 1, after Wazuh (decision 84)
 - node_exporter on all VMs, postgres_exporter on db, blackbox_exporter probing `https://mail.<domain>` (pinned tarballs, decision 120; the probe goes to proxy by address with SNI and Host and verifies against the pinned staging root, plus a DNS probe of Unbound, decision 125); CPU credit balances from CloudWatch through YACE on mon, with a read-only `mon-read-cloudwatch` policy, account and instance IDs dropped from labels (decision 121); one provisioned dashboard, "Lab health" (decision 122)
-- Alertmanager → email/Discord: host down, disk > 80%, cert expiry < 14 days, probe failing, CPU credit balance near 0 (t3 `standard` credits, decision 84)
+- Alertmanager → Discord (decision 110): `TargetDown`, `ProbeFailing` (2 min), `DiskAlmostFull` > 80 % (10 min), `CertExpiresSoon` < 14 days (1 h), `CPUCreditsLow` < 10 (15 min), each unit-tested with `promtool test rules` on every deploy (decisions 84, 126)
 - The vuln host is scraped across fw-ips (decision 68): nftables allows 10.0.5.20 → 10.0.6.10:9100, and the security group names mon's IP
 
 ---

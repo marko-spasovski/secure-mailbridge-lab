@@ -64,6 +64,25 @@
     - amtool
   notify: Restart Alertmanager
 
+# The Discord webhook URL (decision 110): a bearer secret, pulled by mon's
+# own role, readable by Alertmanager only. Before the config, which names it.
+- name: Pull the Discord webhook URL from SSM
+  ansible.builtin.command: >-
+    /usr/local/sbin/fetch-ssm-param {{ mon_discord_webhook_param }}
+    {{ mon_discord_webhook_file }} 0640
+    {{ 'check' if ansible_check_mode else '' }}
+  register: mon_discord_pull
+  changed_when: mon_discord_pull.stdout == 'changed'
+  check_mode: false
+  notify: Restart Alertmanager
+
+- name: Let Alertmanager read the Discord webhook URL
+  ansible.builtin.file:
+    path: "{{ mon_discord_webhook_file }}"
+    owner: root
+    group: alertmanager
+    mode: "0640"
+
 # amtool checks the rendered file before it replaces the old one.
 - name: Write Alertmanager's config
   ansible.builtin.template:

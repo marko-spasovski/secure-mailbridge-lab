@@ -70,6 +70,46 @@
     - promtool
   notify: Restart Prometheus
 
+# The lab's alerts (decision 126). Rules first: the config below names them,
+# and promtool checks both before anything replaces what's running.
+- name: Create the rules and rule-tests directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: prometheus
+    mode: "0750"
+  loop:
+    - /etc/prometheus/rules
+    - /etc/prometheus/tests
+
+- name: Install the alert rules
+  ansible.builtin.copy:
+    src: rules/lab.rules.yml
+    dest: /etc/prometheus/rules/lab.rules.yml
+    owner: root
+    group: prometheus
+    mode: "0640"
+    validate: /usr/local/bin/promtool check rules %s
+  notify: Reload Prometheus
+
+- name: Install the alert rule tests
+  ansible.builtin.copy:
+    src: tests/lab.rules.test.yml
+    dest: /etc/prometheus/tests/lab.rules.test.yml
+    owner: root
+    group: prometheus
+    mode: "0640"
+
+# Every run proves each rule still fires, and stays quiet, as its test says;
+# a changed threshold without a changed test fails the run here.
+- name: Run the alert rule tests
+  ansible.builtin.command:
+    cmd: /usr/local/bin/promtool test rules lab.rules.test.yml
+    chdir: /etc/prometheus/tests
+  changed_when: false
+  check_mode: false
+
 # promtool checks the rendered file before it replaces the old one, so a
 # broken config fails the run instead of a reload.
 - name: Write Prometheus's config

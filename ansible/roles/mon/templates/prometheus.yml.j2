@@ -1,9 +1,12 @@
 # {{ ansible_managed }}
-# Prometheus on mon (task 1.22). 1.23 adds the exporters on every host and
-# the alert rules.
+# Prometheus on mon (tasks 1.22, 1.23): its own exporters, every host's, and
+# the lab's alert rules (decision 126).
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules/*.rules.yml
 
 alerting:
   alertmanagers:
