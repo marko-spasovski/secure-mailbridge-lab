@@ -1623,3 +1623,15 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** Seven writable folders inside the container: an attacker can change the shop's files until it restarts.
 
 **Verify (once built).** `docker inspect` shows `ReadonlyRootfs: true` and the seven volumes; from inside the container (`node -e` with `http.get`), db, app, the host's 9100, IMDS and the internet all fail, and `journalctl -k` shows `VULN-EGRESS-DROP` for each; proxy gets Juice Shop's page; after a restart, a user registered before is gone.
+
+## 131. Every path from vuln through fw-ips (2026-11-08)
+
+**Problem.** Decision 68 gave vuln's route table `0.0.0.0/0`, dmz and mgmt via fw-ips, the subnets its real traffic uses. In the 2.10 test, connections from vuln to db:443 and app:443 never reached fw-ips: for app and data the VPC's `local` route still applied, so the packets went straight to those subnets and were stopped there by the NACLs and security groups. Nothing was let through, but nothing was logged either, and Suricata saw nothing: a lateral-movement attempt from Juice Shop towards the database would leave a trace only in the flow logs in S3.
+
+**Options.** A: add `10.0.3.0/24` and `10.0.4.0/24 → fw-ips ENI` to vuln's table. B: keep the routes and correct the documentation.
+
+**Chosen: A**, decided by Marko. With every private subnet routed through fw-ips, nftables decides and logs every connection from vuln into the VPC, and Suricata sees it, which is what decision 68 meant. The paths stay symmetric: the shared private table already sends 10.0.6.0/24 through fw-ips, so any reply would take the same way back. The cost is two free routes. B leaves the pentest with a blind spot exactly where it matters most.
+
+**Trade-off accepted.** None beyond two more routes to keep in step with the subnet list.
+
+**Verify.** From vuln, TCP 443 to db, app and mon each produce `FW-DROP SRC=10.0.6.10` on fw-ips (before: only mon did); `terraform plan` is clean afterwards.

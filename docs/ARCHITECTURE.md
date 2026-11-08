@@ -61,12 +61,12 @@ Deploy: Terraform (infra) + Ansible (config) · Teardown: `terraform destroy` wh
 | app | 10.0.3.0/24 | → fw-ips ENI | egress for Gmail/Graph APIs via fw |
 | data | 10.0.4.0/24 | → fw-ips ENI | + S3 **gateway endpoint** (free) for backups, added in Tier 2 (T2.3) |
 | mgmt | 10.0.5.0/24 | → fw-ips ENI | admin-only |
-| vuln | 10.0.6.0/24 | → fw-ips ENI | Juice Shop only, own route table; no general egress (decisions 67, 68) |
+| vuln | 10.0.6.0/24 | → fw-ips ENI | Juice Shop only, own route table: `0.0.0.0/0` and every other private subnet → fw-ips ENI; no general egress (decisions 67, 68, 131) |
 
 - **VPN pools are routed, not NATed:** VPC route `10.8.0.0/16 → fw-ips ENI`. Nginx, Wazuh and Suricata see the real VPN client IP, so every event is attributable to a device certificate.
 - fw-ips: **source/destination check disabled**. Its ENI is a standalone resource, so routes can target it before the instance exists.
 - Tier 1 uses one private route table for dmz, app, data and mgmt. `data` gets its own table when the S3 endpoint is added.
-- **East-west inspection for Juice Shop (decision 68):** the private route table has `10.0.6.0/24 → fw-ips ENI` and the vuln table has `0.0.0.0/0`, `10.0.2.0/24` and `10.0.5.0/24 → fw-ips ENI`. These are more specific than the `local` route, which AWS allows when the destination is a whole subnet CIDR. So proxy→Juice Shop traffic is plain HTTP through fw-ips and Suricata. Mailbridge's proxy→app traffic keeps the direct `local` route, so mail never reaches Suricata's logs. Every path to the vuln subnet must be symmetric: the private table is shared with mgmt, so siem's replies to the Juice Shop agent go through fw-ips, and the agent's requests must too, or fw-ips sees half a connection and drops it. Security groups on these paths must name IP addresses, not other groups.
+- **East-west inspection for Juice Shop (decision 68):** the private route table has `10.0.6.0/24 → fw-ips ENI` and the vuln table has `0.0.0.0/0`, `10.0.2.0/24`, `10.0.3.0/24`, `10.0.4.0/24` and `10.0.5.0/24 → fw-ips ENI` (app and data added by decision 131, so no path from vuln skips fw-ips). These are more specific than the `local` route, which AWS allows when the destination is a whole subnet CIDR. So proxy→Juice Shop traffic is plain HTTP through fw-ips and Suricata. Mailbridge's proxy→app traffic keeps the direct `local` route, so mail never reaches Suricata's logs. Every path to the vuln subnet must be symmetric: the private table is shared with mgmt, so siem's replies to the Juice Shop agent go through fw-ips, and the agent's requests must too, or fw-ips sees half a connection and drops it. Security groups on these paths must name IP addresses, not other groups.
 - No NAT Gateway, no ALB, no interface endpoints (all bill hourly).
 
 ---
