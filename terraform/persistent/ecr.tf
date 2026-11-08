@@ -52,3 +52,51 @@ resource "aws_ecr_lifecycle_policy" "mailbridge" {
     ]
   })
 }
+
+# The Juice Shop image (task 2.10, decision 69), mirrored by hand from Docker
+# Hub on the laptop and pulled by digest by the vuln host, which never
+# contacts Docker Hub. Same settings as mailbridge's; its scan will list many
+# known CVEs, which is expected for a deliberately vulnerable application.
+resource "aws_ecr_repository" "juice_shop" {
+  name                 = "juice-shop"
+  image_tag_mutability = "IMMUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  encryption_configuration {
+    encryption_type = "KMS"
+  }
+}
+
+resource "aws_ecr_lifecycle_policy" "juice_shop" {
+  repository = aws_ecr_repository.juice_shop.name
+
+  policy = jsonencode({
+    rules = [
+      {
+        rulePriority = 1
+        description  = "Untagged leftovers from rebuilds expire after a day"
+        selection = {
+          tagStatus   = "untagged"
+          countType   = "sinceImagePushed"
+          countUnit   = "days"
+          countNumber = 1
+        }
+        action = { type = "expire" }
+      },
+      {
+        rulePriority = 2
+        description  = "Keep the last 5 tagged images"
+        selection = {
+          tagStatus      = "tagged"
+          tagPatternList = ["*"]
+          countType      = "imageCountMoreThan"
+          countNumber    = 5
+        }
+        action = { type = "expire" }
+      },
+    ]
+  })
+}
