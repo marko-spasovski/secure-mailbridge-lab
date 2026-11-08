@@ -11,7 +11,7 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "{{ $labels.job }} on {{ $labels.host }}{{ $labels.instance }} is not answering"
+          summary: "{{ $labels.job }} on {{ $labels.host }} ({{ $labels.instance }}) is not answering"
 
       # Mail over HTTPS through proxy, or Unbound's answer for mail.
       - alert: ProbeFailing
