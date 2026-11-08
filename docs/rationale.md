@@ -1647,3 +1647,15 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** No attack results until Tier 2; the Tier 1 write-up describes defences that haven't been tested by an attacker yet.
 
 **Verify.** TASKS lists 2.14, 2.15 and 2.2 to 2.5 under Tier 2; CLAUDE.md and ARCHITECTURE §12 say Tier 1 has no attacks.
+
+## 133. Standard detection only in 2.13 (2026-11-08)
+
+**Problem.** 2.13 planned Wazuh rules for ModSecurity blocks, brute force on 401s, IDOR enumeration and container egress drops. Decision 129 says Juice Shop gets no special rules, so each rule has to be one a real SOC would run for any web application.
+
+**Options.** A: start from Wazuh's built-in web rules, add local rules only where they leave a gap, keep every rule independent of the application and valid for mail and vuln alike, and drop the IDOR rule. B: keep the plan, IDOR heuristic included.
+
+**Chosen: A**, decided by Marko. Brute-force detection is in practically every framework (CIS Control 8, NIST SP 800-92, PCI DSS 10.2, ATT&CK T1110), and egress monitoring of servers and containers is standard practice (NIST SP 800-190, the CIS Docker Benchmark, ATT&CK T1041 and T1071). Both use generic signals: status codes and sources in the access log, and new outbound connections. An IDOR rule would have to know how one application numbers its objects (`/api/Baskets/1, 2, 3…`), which is not something a SIEM normally does; IDOR is found by testing and code review and prevented by the application's own authorisation checks. In practice a vendor ruleset comes first and local rules fill gaps, so the first step is a list of which built-in Wazuh rule fires on which test event. B would add an application-specific heuristic, against decision 129.
+
+**Trade-off accepted.** No SIEM detection of IDOR in Tier 1; Tier 2's pentest will show whether anything notices it, which is itself a finding.
+
+**Verify (once built).** A table of built-in rules against test events; each local rule fires once on a test event for both mail and vuln.

@@ -232,8 +232,8 @@ Targets: own deployment only, never Google/Microsoft APIs. Each one follows atta
 - [ ] **2.12** ModSecurity for Juice Shop: the same configuration as mail (decisions 63 to 66: CRS 4.25.0, blocking, PL1, audit parts without bodies), no separate bundle, mode or level (decision 129, replaces decision 71); false positives in Juice Shop's normal use are tuned like a production app and recorded · C
   - Verify: Juice Shop's normal use (browse, register, log in, basket, checkout) works through proxy; the same SQLi gets 403 on both servers and both are in the audit log
   - Layer loop: try Juice Shop's normal flows against the mail configuration in the container harness first; write the role changes; deploy, `--check --diff` shows no difference; rebuild proxy from code, repeat the checks above, and the second run reports `changed=0`
-- [ ] **2.13** Wazuh: proxy agent reads both audit logs and JSON access logs; vuln agent reads `DOCKER-USER` drops; local rules 100100 to 100299 (ModSecurity block, brute force on 401s, IDOR enumeration, egress drop) · C
-  - Verify: each rule fires once on a test event and appears in the dashboard
+- [ ] **2.13** Wazuh: proxy agent reads both audit logs and JSON access logs; vuln agent reads `DOCKER-USER` drops; first what Wazuh's built-in rules already catch in Nginx's and ModSecurity's logs, then local rules 100100 to 100299 only for the gaps, application-independent and for both servers (brute force on 401s, `VULN-EGRESS-DROP` egress attempts); no IDOR rule, which Tier 2's pentest tests instead (decision 133) · C
+  - Verify: a list of which built-in rule fires on which test event; each local rule fires once on a test event, for mail and vuln alike, and appears in the dashboard
 - [x] **2.16** ~~Juice Shop window run (2.1)~~ Dropped 2026-11-08 (decision 129) · M
 
 **Close-out (after the Juice Shop block, decision 83)**
