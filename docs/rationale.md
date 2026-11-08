@@ -1536,6 +1536,8 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 
 **Trade-off accepted.** Fewer panels than a community dashboard; more can be added per need.
 
+**Built (3f, 2026-11-08).** `lab-health.json` (uid `lab-health`), ten panels in three rows that each answer one question. *Is everything up?*: `up` for every scrape target and `probe_success` for both probes, as UP/DOWN tiles. *How busy are the hosts?*: CPU used, CPU **steal** (the guest's only view of credit throttling, next to the credit balance it explains), memory used (MemAvailable already counts reclaimable cache), network in and out without loopback. *Will something run out?*: disk used on real filesystems with the alert's 80 % as the red step, the credit balance with a line at the alert's 10, and the certificate's days left coloured at 14 and 30. Each panel's description names the alert and decision it belongs to. The file provider has `disableDeletion` and `allowUiUpdates: false`, so the repo is the only source. Every query was run against the real Prometheus on mon before the PR: all ten return data.
+
 **Verify (once built).** The dashboard loads from provisioning, every panel shows data, and it can't be saved over in the UI.
 
 ## 123. Splitting 1.23 (2026-11-08)
