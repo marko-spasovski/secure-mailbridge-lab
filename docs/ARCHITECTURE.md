@@ -89,7 +89,7 @@ All instances: IMDSv2 required · SSM agent (admin access; Ansible uses SSH tunn
 - fw-ips: its Elastic IP belongs to the `lab` stack and exists only during a session. Clients connect to `vpn.<domain>` (TTL 60), which `lab` updates on each apply.
 - app: pulls the Mailbridge image from ECR with its instance role, pinned by digest (`image@sha256:...`). The `mailbridge` repository is in `persistent`, with immutable tags, scanning on push and a lifecycle policy (decision 53).
 - proxy: lego (the ACME client) authenticates to Route 53 with its instance role; no stored DNS credentials (decision 59).
-- vuln: the container runs with `--cap-drop ALL`, `no-new-privileges`, memory and pids limits, its image's non-root user, no Docker socket, and a DNS server address that routes nowhere. The host's `DOCKER-USER` chain drops (and logs) every new connection from the container network, so SSRF or RCE in the container can't open anything outward. IMDS hop limit 1 keeps the container away from IMDS. The host never contacts Docker Hub (decision 69).
+- vuln: the container runs with `--read-only` (seven folders it rewrites at start as anonymous volumes deleted with it, `/tmp` a `noexec` tmpfs, decision 130), `--cap-drop ALL`, `no-new-privileges`, memory and pids limits, its image's non-root user, no Docker socket, and a DNS server address that routes nowhere. The host's `DOCKER-USER` chain, and its own chain on `INPUT` for traffic to the host itself, drop (and log as `VULN-EGRESS-DROP`) every new connection from the container network, so SSRF or RCE in the container can't open anything outward. IMDS hop limit 1 keeps the container away from IMDS. The host never contacts Docker Hub (decision 69).
 
 ---
 

@@ -1,0 +1,15 @@
+# Managed by Ansible (vuln role). Decision 69. After Docker, which creates
+# and resets its chains at start; before Juice Shop, which needs it.
+[Unit]
+Description=Block new connections from the Juice Shop container
+After=docker.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/vuln-egress
+
+[Install]
+WantedBy=multi-user.target

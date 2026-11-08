@@ -1,0 +1,17 @@
+---
+- name: Restart Docker
+  ansible.builtin.systemd_service:
+    name: docker
+    state: restarted
+
+- name: Restart the egress block
+  ansible.builtin.systemd_service:
+    name: vuln-egress
+    state: restarted
+    daemon_reload: true
+
+- name: Restart Juice Shop
+  ansible.builtin.systemd_service:
+    name: juice-shop
+    state: restarted
+    daemon_reload: true
