@@ -1599,3 +1599,15 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** No console practice for route tables with more specific routes; the import step of decision 11 is skipped for this layer.
 
 **Verify.** The plan's 31 resources exist; `tcpdump` on fw-ips sees proxy → 10.0.6.10:3000 and nftables logs it as `FW-DROP` (until 2.9); proxy → app traffic is absent from fw-ips's capture; the next plan is clean.
+
+## 129. Juice Shop as a regular application (2026-11-08)
+
+**Problem.** Decisions 67 to 76 planned Juice Shop as a measurement target: its own ModSecurity bundle with a separate mode and paranoia level, request bodies in its audit log, an eight-configuration matrix, an internet window, and (proposed while building 2.9) Suricata variables changed so proxy counted as external on its path. Testing that last change showed how much special handling this needed: one form of the variable was rejected by Suricata and would have disabled every rule using it, and ET Open had no rule for a generic SQL injection on Juice Shop's URLs anyway.
+
+**Options.** A: exactly like Mailbridge, isolation included: proxy reaches it over the `local` route and nothing special exists. B: the same defences as Mailbridge, but kept isolated. C: keep the measurement plan.
+
+**Chosen: B**, decided by Marko. Juice Shop runs behind proxy with the same Nginx and ModSecurity configuration as Mailbridge (decisions 63 to 66), and the pentest asks what a real attacker achieves against that, not how tuned test settings behave. What stays is safety, not measurement: the subnet routed through fw-ips with vuln → VPC dropped (decision 68), the container hardening and `DOCKER-USER` (decision 69), because Juice Shop contains deliberate code execution that must not reach db or Mailbridge, as a real company would isolate a known-weak app; and the attacker certificate, scope wrapper with rate caps and separate browser profile (decisions 73, 75, 76), because attacks must stay on Marko's own deployment within AWS's rules. Suricata still inspects the path, as it inspects all forwarded traffic, with its configuration unchanged. Dropped: decision 71 (bundles, mode, level, matrix) and decision 72 (the window and its listener); 2.1 and 2.16 go, 2.12 and 2.15 are rewritten. A would let an RCE in Juice Shop open connections to db. C answers a WAF-tuning question Marko no longer wants to ask.
+
+**Trade-off accepted.** No comparison of ModSecurity modes or paranoia levels, and no request bodies as evidence for Juice Shop; Suricata's ET rules will rarely match proxy → Juice Shop traffic, which is itself a finding about signature IDS inside a network.
+
+**Verify.** ARCHITECTURE and TASKS no longer mention the window, the 8443 listener or the per-server bundles; 2.12's check shows the same SQLi blocked on both servers; 2.15's findings name a layer for every step.
