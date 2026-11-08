@@ -13,7 +13,7 @@ Deploy: Terraform (infra) + Ansible (config) · Teardown: `terraform destroy` wh
 ```
                          Internet
                             │  UDP 1194 only (OpenVPN)
-                            │  TCP 443 closed — opened only for outside-attack test windows
+                            │  TCP 443 closed (no test window is planned, decision 129)
                             │
   VPC 10.0.0.0/16  ┌────────▼──────────────────────────────────────┐
                    │ PUBLIC 10.0.1.0/24          route: 0/0 → IGW  │
@@ -99,7 +99,7 @@ All instances: IMDSv2 required · SSM agent (admin access; Ansible uses SSH tunn
 |---|---|---|
 | sg-fw | UDP 1194 | 0.0.0.0/0 (or home IP if static) |
 | | all (to be routed/NATed) | 10.0.0.0/16 |
-| | TCP 443 | 0.0.0.0/0 — **test windows only** |
+| | TCP 443 | 0.0.0.0/0 — only with the `open_https_test_window` switch, which no task uses since decision 129 |
 | sg-proxy | TCP 443 | 10.8.0.0/22 (VPN pools) |
 | | TCP 443 | 10.0.5.20/32 (mon's blackbox probe, decision 84) |
 | sg-app | TCP 3000 | sg-proxy |
@@ -109,7 +109,7 @@ All instances: IMDSv2 required · SSM agent (admin access; Ansible uses SSH tunn
 | sg-mon | TCP 3000 (Grafana) | 10.8.1.0/24 |
 | sg-vuln | TCP 3000 | 10.0.2.10/32 (proxy, by IP: decision 68) |
 | | TCP 9100 | 10.0.5.20/32 (mon, by IP: the path crosses fw-ips) |
-| sg-proxy | TCP 8443 | Marko's public IP /32 — **Juice Shop test windows only** (decision 72) |
+
 | all | TCP 9100 (node_exporter), 9187 (postgres_exporter on db) | sg-mon |
 
 mon's scrape and probe rules are built with the exporters in 1.23: 9100 in 3a (the rows above, sg-mon egress to each scraped group and to 10.0.1.10, and an nftables input rule on fw-ips; decision 120), 9187 in 3b (sg-db from sg-mon, data NACL 108/109; postgres_exporter logs in by peer authentication, decision 124) and 443 to proxy in 3c (sg-proxy and dmz NACL 105 from 10.0.5.20/32; the probe targets proxy by address with SNI and Host, decision 125); Grafana's row, sg-mon's egress and the mgmt NACL's 112/115 are built in 1.22 (decision 111).
@@ -143,16 +143,16 @@ Second layer: Network ACLs per subnet mirroring the same flows. Third layer: nft
 | data | 100 TCP 5432 from 10.0.3.0/24 · 105 deny TCP 5432 from 0.0.0.0/0 · 106 TCP 9100 from 10.0.5.20/32 · 107 deny TCP 9100 from 0.0.0.0/0 · 108 TCP 9187 from 10.0.5.20/32 · 109 deny TCP 9187 from 0.0.0.0/0 · 110 TCP eph from 0.0.0.0/0 · 120 UDP eph from 0.0.0.0/0 | baseline · 150 agents · 160 TCP eph to 10.0.3.0/24 · 170 TCP eph to 10.0.5.20/32 |
 | mgmt | 100 TCP 1514–1515 from 10.0.0.0/16 · 105 deny TCP 1514–1515 from 0.0.0.0/0 · 110 TCP 443 from 10.8.1.0/24 · 112 TCP 3000 from 10.8.1.0/24 · 115 deny TCP 3000 from 0.0.0.0/0 · 120 TCP eph from 0.0.0.0/0 · 130 UDP eph from 0.0.0.0/0 | baseline · 160 TCP eph to 10.0.0.0/16 · 170 TCP eph to 10.8.1.0/24 |
 
-Baseline outbound: 110 TCP 443 to 0.0.0.0/0 · 120 UDP 123 to 0.0.0.0/0 · 130 UDP 53 and 140 TCP 53 to 10.0.1.10/32. Agents: TCP 1514–1515 to 10.0.5.0/24. A 443 test window also needs inbound TCP 443 and outbound TCP eph to 0.0.0.0/0 on public.
+Baseline outbound: 110 TCP 443 to 0.0.0.0/0 · 120 UDP 123 to 0.0.0.0/0 · 130 UDP 53 and 140 TCP 53 to 10.0.1.10/32. Agents: TCP 1514–1515 to 10.0.5.0/24. The `open_https_test_window` switch would add inbound TCP 443 and outbound TCP eph to 0.0.0.0/0 on public; it stays off (decision 129).
 
 **Juice Shop additions (decisions 67, 68, 72):**
 
 | Subnet | Inbound | Outbound |
 |---|---|---|
 | vuln (new) | 100 TCP 3000 from 10.0.2.0/24 · 105 deny TCP 3000 from 0.0.0.0/0 · 106 TCP 9100 from 10.0.5.20/32 · 107 deny TCP 9100 from 0.0.0.0/0 · 110 TCP eph from 0.0.0.0/0 · 120 UDP eph from 0.0.0.0/0 | baseline · 150 agents · 160 TCP eph to 10.0.2.0/24 · 170 TCP eph to 10.0.5.20/32 |
-| dmz (added) | 105 TCP 443 from 10.0.5.20/32 (mon's probe, decision 84) · window only: TCP 8443 from Marko's /32 | 105 TCP 3000 to 10.0.6.0/24 · window only: TCP eph to Marko's /32 |
+| dmz (added) | 105 TCP 443 from 10.0.5.20/32 (mon's probe, decision 84) | 105 TCP 3000 to 10.0.6.0/24 |
 
-The vuln subnet has no rule to data, app or mgmt, so db, Mailbridge and Wazuh's dashboard are refused at its NACL as well as at its security group and on fw-ips. A Juice Shop window also needs inbound TCP 443 from Marko's /32 on public.
+The vuln subnet has no rule to data, app or mgmt, so db, Mailbridge and Wazuh's dashboard are refused at its NACL as well as at its security group and on fw-ips. Juice Shop is never exposed to the internet (decision 129).
 
 **nftables on fw-ips (core rules):** fw-ips has one interface, so rules separate internet from VPC traffic by address. NAT applies only to private subnets going to non-VPC addresses, never to VPN pools.
 - `tun0` user pool (10.8.0.0/24) → only `10.0.2.10:443`
@@ -161,7 +161,7 @@ The vuln subnet has no rule to data, app or mgmt, so db, Mailbridge and Wazuh's 
 - to fw-ips itself: UDP 1194, DHCP replies, DNS to 10.0.1.10 from private subnets and VPN pools, ping from the admin pool only; `output` stays open
 - everything else: drop + log → Wazuh
 - forwarded `tun0` traffic → NFQUEUE → Suricata (inline, can drop), in a separate chain after the firewall rules, failing closed
-- Juice Shop (decisions 67, 68, 72), written by Marko in 2.9: proxy 10.0.2.10 → 10.0.6.10:3000 accepted and queued to Suricata; the vuln subnet is **not** in the private-subnet set, so it gets only explicit TCP 443 and UDP 123 to the internet (logged `FW-EGRESS`), TCP 1514–1515 to siem 10.0.5.10, and nothing else to any VPC address (dropped and logged); during a window, internet TCP 443 from Marko's /32 is DNATed to 10.0.2.10:8443 and queued to Suricata
+- Juice Shop (decisions 67, 68, 129), 2.9: proxy 10.0.2.10 → 10.0.6.10:3000 accepted, and vuln's traffic queued to Suricata like the VPN's, with Suricata's configuration unchanged (no rule or variable for Juice Shop); the vuln subnet is **not** in the private-subnet set, so it gets only explicit TCP 443 and UDP 123 to the internet (logged `FW-EGRESS`, SNAT like the private subnets), TCP 1514–1515 to siem 10.0.5.10, TCP 9100 from mon, and nothing else to any VPC address (dropped and logged)
 
 ---
 
@@ -188,7 +188,7 @@ The vuln subnet has no rule to data, app or mgmt, so db, Mailbridge and Wazuh's 
 - **Staging certificates while building and rebuilding; switch to production certs once the setup is stable** (avoids Let's Encrypt rate limits).
 - DNS provider: **Route 53** public hosted zone in the `persistent` stack. `<domain>` is a subdomain of a domain Marko already owns, delegated by adding NS records for that subdomain at the parent's DNS provider. The parent domain stays where it is, and the real name stays out of this public repo.
 - Public records: `_acme-challenge.mail.<domain>` (TXT, lego) and `vpn.<domain>` (A, TTL 60, written by `lab`). `mail.<domain>` is never public.
-- Juice Shop (decisions 70, 72): Unbound adds `vuln.<domain> → 10.0.2.10`. proxy serves it with its **own** certificate (not a SAN on mail's), from a templated `lego-renew@<name>` service per name, with the decision 60 condition extended to `_acme-challenge.vuln.<domain>`. During a window, a public `vuln.<domain>` A record points at the Elastic IP, and fw-ips forwards to a **separate listener on 10.0.2.10:8443** that has only a handshake-refusing default server and the Juice Shop server. `mail.<domain>` has no server block on 8443, so it can't be reached from outside even by asking for its name.
+- Juice Shop (decisions 70, 129): Unbound adds `vuln.<domain> → 10.0.2.10`. proxy serves it with its **own** certificate (not a SAN on mail's), from a templated `lego-renew@<name>` service per name, with the decision 60 condition extended to `_acme-challenge.vuln.<domain>`. Like mail, it is reachable only over the VPN; there is no public listener or record.
 - OAuth redirects `https://mail.<domain>/accounts/callback/gmail` and `https://mail.<domain>/accounts/callback/outlook` (the app's own routes) work because the redirect happens in the browser, which is inside the tunnel.
 - Google/Microsoft OAuth apps stay in **testing mode, test accounts only**.
 
@@ -215,7 +215,7 @@ The vuln subnet has no rule to data, app or mgmt, so db, Mailbridge and Wazuh's 
 **Security (Wazuh — "is something malicious happening?")**
 - Wazuh 4.14.9, pinned, from Wazuh's apt repository with its signing key checked, configured entirely by the `siem` role (decisions 85, 86). The indexer's Java heap is 3 GB on the t3.large (decisions 87, 99). Its data lives on an encrypted volume in `persistent` that is attached to each session's `siem` host, so alerts survive teardown; certificates and passwords come from SSM, so the dashboard's certificate stays the same every session (decisions 88, 89). Wazuh's repository may supply only its four packages, each only at the pinned version (an apt pin by version) and held (decisions 91, 104); the volume is formatted only when it has no filesystem and the indexer can't start without it (decision 92); the indexer listens on 10.0.5.10 only (decision 93); its only internal users are `admin` and `kibanaserver` (decision 94). The manager's API listens on 127.0.0.1 only, agent enrollment (authd, 1515) requires the password in `/siem/agent-enrollment-password`, and vulnerability detection is off in Tier 1 (decisions 96, 97); Filebeat, the connector and the API users get their credentials from SSM through `set-manager-credentials` (decision 95). The dashboard listens on 10.0.5.10:443 with TLS 1.3 only and verifies the indexer's address (decision 98). The Wazuh agent (`wazuh_agent` role) runs on fw-ips, db, app and proxy at the same pinned version, each pulling the enrollment password with its own instance role and enrolling under its host name (decisions 100, 101)
 - Suricata `eve.json`, nftables drops, Nginx access/error logs + ModSecurity audit log, auth logs, OpenVPN connect/disconnect, file integrity monitoring. Each agent reads its sources from a per-group list in `group_vars` (fw-ips: `eve.json`; proxy: Nginx and the audit log; the kernel, OpenVPN and auth through journald) (decision 105). Where Wazuh decodes an event but stores no alert, the lab's own rules in `mailbridge_rules.xml` (IDs 100100–100299, children of the decoding parent) add one: nftables drops and egress, a burst of drops from one address, OpenVPN session ends, and ModSecurity 403 blocks from the audit log (decision 106)
-- Juice Shop (decision 71): proxy runs one ModSecurity bundle per server, so Mailbridge and Juice Shop have their own engine mode and paranoia level. Juice Shop's audit log (`vuln-audit.log`) keeps request bodies (`ABCFHZ`), because its data is fake and the payload is the evidence; Mailbridge's keeps decision 66. Both audit logs and the per-server JSON access logs go to Wazuh, plus `DOCKER-USER` drops from the vuln host and Suricata's alerts on the decrypted proxy→Juice Shop path
+- Juice Shop (decision 129, replaces decision 71): a regular application behind proxy with the same Nginx and ModSecurity configuration as Mailbridge (CRS 4.25.0, blocking, PL1, the audit parts of decision 66); false positives in normal use are tuned the way a production app would be, and recorded as findings. The shared audit log and access log go to Wazuh, plus `DOCKER-USER` drops from the vuln host and Suricata's alerts on the queued proxy→Juice Shop path
 
 **Network evidence (VPC flow logs)**
 - All traffic metadata → S3 bucket in `persistent`, 30-day lifecycle. Used for investigation, including traffic that never crosses fw-ips. Not fed to Wazuh in Tier 1, including for Juice Shop.
@@ -244,11 +244,11 @@ Jest + Supertest (API) · Playwright (UI) · k6 (load) · Trivy (image scan) · 
 
 | Position | Tests |
 |---|---|
-| Outside (internet) | Scan: only UDP 1194 should respond. During a 443 window (Marko's /32 only, Juice Shop only, decision 72): SQLi/XSS/brute force vs ModSecurity; Mailbridge is never exposed and is tested from inside the VPN; Suricata sees only traffic the firewall allowed, so TLS metadata and behaviour, not payloads, because TLS ends at Nginx. Scans of blocked ports appear as nftables drops |
+| Outside (internet) | Scan: only UDP 1194 should respond; scans of blocked ports appear as nftables drops. No 443 window is opened: Mailbridge and Juice Shop are reached only over the VPN (decision 129) |
 | Inside (stolen VPN cert) | What's reachable? What does Suricata/Wazuh see? Time to revoke via CRL? |
 | Malicious email | HTML/JS payload in an incoming email → is it sanitized? CSP? |
 | Access control | Can user A read user B's mailbox by changing IDs? |
-| Juice Shop ground truth (decisions 67–76) | The same attack classes against a known-vulnerable target from the attacker certificate: which layer blocks, detects or misses each, ModSecurity mode × paranoia level matrix, decrypted traffic for Suricata, egress containment of SSRF and RCE |
+| Juice Shop pentest (decisions 67–76, 129) | Juice Shop as a regular shop application with the same defences as Mailbridge, pentested in full from the attacker certificate: what an attacker achieves, and which layer (nftables, Suricata, ModSecurity, Wazuh, the container's isolation) stopped, saw or missed each step; no testing-only rule, mode or variable |
 
 For each: attack → detection (or miss) → custom rule/fix → re-test.
 
