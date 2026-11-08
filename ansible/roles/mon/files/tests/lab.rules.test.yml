@@ -22,7 +22,7 @@ tests:
         exp_alerts:
           - exp_labels: { severity: critical, job: node, host: app, instance: "10.0.3.10:9100" }
             exp_annotations:
-              summary: "node on app10.0.3.10:9100 is not answering"
+              summary: "node on app (10.0.3.10:9100) is not answering"
 
   # ProbeFailing: 0 for 3 minutes fires.
   - interval: 15s
