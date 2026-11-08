@@ -1,0 +1,36 @@
+# {{ ansible_managed }}
+# YACE on mon (decisions 114, 120, 121). Credentials come from mon's
+# instance role through IMDSv2.
+[Unit]
+Description=YACE CloudWatch exporter
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=yace
+Group=yace
+ExecStart=/usr/local/bin/yace \
+  --config.file=/etc/yace/yace.yml \
+  --listen-address={{ mon_yace_listen }} \
+  --scraping-interval=300
+Restart=on-failure
+
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -54,3 +54,18 @@ scrape_configs:
         target_label: instance
       - target_label: __address__
         replacement: "{{ mon_blackbox_listen }}"
+
+  # CPU credit balances from CloudWatch through YACE (decision 121). The
+  # account ID (account_id, the ARN in name) and the instance ID are dropped,
+  # so neither can reach a screenshot or a report; host matches
+  # node_exporter's label.
+  - job_name: yace
+    scrape_interval: 60s
+    static_configs:
+      - targets: ["{{ mon_yace_listen }}"]
+    metric_relabel_configs:
+      - source_labels: [tag_Name]
+        regex: mailbridge-lab-(.+)
+        target_label: host
+      - regex: account_id|name|dimension_InstanceId
+        action: labeldrop

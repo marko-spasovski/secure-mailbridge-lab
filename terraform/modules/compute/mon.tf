@@ -4,7 +4,7 @@
 
 resource "aws_iam_role" "mon" {
   name               = "${var.name}-mon"
-  description        = "mon instance role: SSM agent, the Wazuh enrollment password and /mon/* only"
+  description        = "mon instance role: SSM agent, the Wazuh enrollment password, /mon/* and CloudWatch reads"
   assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
 }
 
@@ -29,6 +29,29 @@ resource "aws_iam_role_policy" "mon_params" {
   name   = "mon-read-mon-parameters"
   role   = aws_iam_role.mon.id
   policy = data.aws_iam_policy_document.mon_params.json
+}
+
+# YACE reads the instances' CPU credit balances (decision 121). Read-only:
+# no PutMetricData, no alarms, no logs. These three actions support no
+# resource-level permissions, so "*" is the only valid resource.
+data "aws_iam_policy_document" "mon_cloudwatch" {
+  #checkov:skip=CKV_AWS_356:GetMetricData, ListMetrics and tag:GetResources accept only "*" as resource; all three are read-only.
+  statement {
+    sid    = "ReadCloudWatchMetrics"
+    effect = "Allow"
+    actions = [
+      "cloudwatch:GetMetricData",
+      "cloudwatch:ListMetrics",
+      "tag:GetResources",
+    ]
+    resources = ["*"]
+  }
+}
+
+resource "aws_iam_role_policy" "mon_cloudwatch" {
+  name   = "mon-read-cloudwatch"
+  role   = aws_iam_role.mon.id
+  policy = data.aws_iam_policy_document.mon_cloudwatch.json
 }
 
 resource "aws_iam_instance_profile" "mon" {

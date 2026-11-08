@@ -1,0 +1,76 @@
+---
+# YACE from the pinned release tarball (task 1.23, decisions 120, 121).
+
+- name: Create the yace system user
+  ansible.builtin.user:
+    name: yace
+    system: true
+    shell: /usr/sbin/nologin
+    home: /nonexistent
+    create_home: false
+
+- name: Create the YACE download, install and config directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /var/cache/yace
+    - /opt/yace/{{ mon_yace_version }}
+    - /etc/yace
+
+- name: Download the pinned YACE release
+  ansible.builtin.get_url:
+    url: https://github.com/prometheus-community/yet-another-cloudwatch-exporter/releases/download/v{{ mon_yace_version }}/{{ mon_yace_archive }}
+    dest: /var/cache/yace/{{ mon_yace_archive }}
+    checksum: sha256:{{ mon_yace_sha256 }}
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Unpack YACE
+  ansible.builtin.unarchive:
+    src: /var/cache/yace/{{ mon_yace_archive }}
+    dest: /opt/yace/{{ mon_yace_version }}
+    remote_src: true
+    extra_opts: [--strip-components=1]
+    include:
+      - yet-another-cloudwatch-exporter-{{ mon_yace_version }}.linux-amd64/yace
+    owner: root
+    group: root
+    creates: /opt/yace/{{ mon_yace_version }}/yace
+
+- name: Link the pinned YACE into the PATH
+  ansible.builtin.file:
+    src: /opt/yace/{{ mon_yace_version }}/yace
+    dest: /usr/local/bin/yace
+    state: link
+  notify: Restart YACE
+
+- name: Write YACE's config
+  ansible.builtin.template:
+    src: yace.yml.j2
+    dest: /etc/yace/yace.yml
+    owner: root
+    group: yace
+    mode: "0640"
+    validate: /usr/local/bin/yace verify-config --config.file %s
+  notify: Restart YACE
+
+- name: Install the YACE unit
+  ansible.builtin.template:
+    src: yace.service.j2
+    dest: /etc/systemd/system/yace.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart YACE
+
+- name: Enable and start YACE
+  ansible.builtin.systemd_service:
+    name: yace
+    enabled: true
+    state: started
+    daemon_reload: true
