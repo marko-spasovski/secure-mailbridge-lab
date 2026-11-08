@@ -13,7 +13,7 @@ it is verified, and the relevant doc section is updated.
 ## Current position
 
 - **Phase:** 1, Tier 1 on AWS (0.6 and 0.7 still open)
-- **Next tasks, in order:** 1.16 (`siem` host, Wazuh manager, indexer and dashboard) → 1.17 (Wazuh agents and log collection on every host) → 1.22 and 1.23 (`mon`: Prometheus, Grafana, Alertmanager, exporters; moved into Tier 1, decision 84) → the Juice Shop block (2.1, 2.7 to 2.16) → close-out 1.18 to 1.21 (decision 83) → scenarios 2.2 to 2.5. The full detection and health stack comes first, so every Juice Shop attack can be followed from nftables through Suricata and ModSecurity to Wazuh, with its effect on the hosts visible in Grafana.
+- **Next tasks, in order (decision 132):** finish 2.10 (decision 131 routes, second run) → 2.11 (proxy for `vuln.<domain>`) → 2.12 (ModSecurity for Juice Shop) → 2.13 (Wazuh rules) → close-out 1.18 to 1.21 → the Tier 1 write-up. Then Tier 2: the attacker tooling (2.14), the Juice Shop pentest (2.15), the Mailbridge scenarios (2.2 to 2.5). Done 2026-11-07/08: 1.22, 1.23, 2.8, 2.9, most of 2.10.
 - **Done:** 1.13 (`db`), 1.14 (`app`), 1.15 (`proxy`). The Suricata rules from PR 60 (decisions 79 to 81) are merged; their deploy and live re-test on fw-ips is pending.
 
 ## Before db (agreed 2026-11-02)
@@ -205,11 +205,11 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Verify: every target `up`; each alert fires once on a forced test (stop a host's exporter, a probe to a wrong name) and clears
   - Note: `mail.<domain>` resolves only through Unbound (VPN-only, §6), and mon uses AmazonProvidedDNS, so the probe targets 10.0.2.10 and sets the TLS server name (`tls_config.server_name`) instead of resolving the name
 
-## Phase 2: Attack scenarios (§11)
+## Phase 2: Juice Shop build and close-out (attacks in Tier 2, decision 132)
 
 Targets: own deployment only, never Google/Microsoft APIs. Each one follows attack → detection or miss → rule/fix → re-test.
 
-**Juice Shop block, first (decisions 67 to 76, 129).** Juice Shop is treated as a regular shop application with the same defences as Mailbridge, isolated in its own subnet, and pentested in full (decision 129). Done first in Phase 2, after 1.16, 1.17, 1.22 and 1.23, so Wazuh and Grafana collect from every layer before anything is measured (decision 83 replaces decision 67's 1.19 gate). Same layer loop: hand build → test → compare with code → rebuild from code → re-test. Flow logs stay S3-only.
+**Juice Shop block, first (decisions 67 to 76, 129).** Juice Shop is treated as a regular shop application with the same defences as Mailbridge, isolated in its own subnet (decision 129); Tier 1 builds and monitors it, and the pentest is Tier 2 (decision 132). Done first in Phase 2, after 1.16, 1.17, 1.22 and 1.23, so Wazuh and Grafana collect from every layer before anything is measured (decision 83 replaces decision 67's 1.19 gate). Same layer loop: hand build → test → compare with code → rebuild from code → re-test. Flow logs stay S3-only.
 
 - [x] **2.1** ~~Outside: scan, then SQLi/XSS/brute force against Juice Shop during a 443 window from Marko's /32 only~~ Dropped 2026-11-08 (decision 129): no window; the outside scan stays in 1.19 · M
 - [x] **2.7** Decisions 67 to 76 and the doc updates (ARCHITECTURE, TASKS, decisions, rationale, threat model) · C
@@ -234,10 +234,6 @@ Targets: own deployment only, never Google/Microsoft APIs. Each one follows atta
   - Layer loop: try Juice Shop's normal flows against the mail configuration in the container harness first; write the role changes; deploy, `--check --diff` shows no difference; rebuild proxy from code, repeat the checks above, and the second run reports `changed=0`
 - [ ] **2.13** Wazuh: proxy agent reads both audit logs and JSON access logs; vuln agent reads `DOCKER-USER` drops; local rules 100100 to 100299 (ModSecurity block, brute force on 401s, IDOR enumeration, egress drop) · C
   - Verify: each rule fires once on a test event and appears in the dashboard
-- [ ] **2.14** Attacker device certificate in the user pool (decision 73); `attacks/scope.conf` and the wrapper with rate caps (decision 75); separate browser profile for Juice Shop (decision 76) · M+C
-  - Verify: attacker profile gets 10.8.0.x; the wrapper refuses 10.0.0.2, a public IP and `mail.<domain>` in a Juice Shop run
-- [ ] **2.15** Pentest of the full application (decision 129): reconnaissance, the OWASP Top 10 classes and Juice Shop's challenges, from the attacker certificate through the scope wrapper with rate caps, against the regular defences · M
-  - Verify: `findings-report.md` has one entry per finding: what the attacker achieved, and which layer stopped, saw or missed it
 - [x] **2.16** ~~Juice Shop window run (2.1)~~ Dropped 2026-11-08 (decision 129) · M
 
 **Close-out (after the Juice Shop block, decision 83)**
@@ -250,20 +246,30 @@ Targets: own deployment only, never Google/Microsoft APIs. Each one follows atta
 - [ ] **1.21** Update docs for any deviation; confirm teardown works · M+C
   - Verify: after `terraform destroy` of `lab` (approved), no billable lab resources remain
 
-**Deferred until after 2.15.** Not started or planned before the Juice Shop block is finished: a known-vulnerable target first, to learn how ModSecurity, Suricata and Wazuh behave before attacking Mailbridge.
+**Any time, when Marko says so**
+- [ ] **2.6** Switch to production Let's Encrypt certs, only when Marko says so · M+C
+  - Verify: `curl https://mail.<domain>` succeeds without `-k`
+
+**Tier 1 is done here.** Tier 2, starting with the attacks, begins only after this write-up (decision 132).
+
+## Tier 2 (gated)
+
+**Attacks (decision 132).** Tier 1 builds every layer and learns how it behaves; every attack waits for Tier 2. Order: the attacker tooling, then the Juice Shop pentest, then the Mailbridge scenarios.
+
+- [ ] **2.14** Attacker device certificate in the user pool (decision 73); `attacks/scope.conf` and the wrapper with rate caps (decision 75); separate browser profile for Juice Shop (decision 76) · M+C
+  - Verify: attacker profile gets 10.8.0.x; the wrapper refuses 10.0.0.2, a public IP and `mail.<domain>` in a Juice Shop run
+- [ ] **2.15** Pentest of the full application (decision 129): reconnaissance, the OWASP Top 10 classes and Juice Shop's challenges, from the attacker certificate through the scope wrapper with rate caps, against the regular defences · M
+  - Verify: `findings-report.md` has one entry per finding: what the attacker achieved, and which layer stopped, saw or missed it
+
+**Mailbridge scenarios**, after the Juice Shop pentest: a known-vulnerable target first, to learn how ModSecurity, Suricata and Wazuh behave before attacking Mailbridge (decision 83).
 - [ ] **2.2** Inside: stolen VPN cert: reachability, visibility, time to revoke via CRL; include private hosts querying 10.0.0.2 directly (decision 30) · M
 - [ ] **2.3** Malicious email: HTML/JS payload, sanitising, CSP · M
 - [ ] **2.4** Access control: user A reading user B's mailbox by changing IDs · M
 - [ ] **2.5** Complete `findings-report.md`; TCP 443 confirmed closed again · M
   - Verify: each scenario has all four steps recorded
 
-**Any time, when Marko says so**
-- [ ] **2.6** Switch to production Let's Encrypt certs, only when Marko says so · M+C
-  - Verify: `curl https://mail.<domain>` succeeds without `-k`
 
-**Tier 1 is done here.** Tier 2 starts only after this write-up.
-
-## Tier 2 (gated)
+**Other Tier 2 work**
 
 - [x] **T2.1** Moved into Tier 1 as 1.22 and 1.23 (decision 84)
 - [ ] **T2.2** App CI (§10): Jest, Playwright, k6, Trivy, SonarCloud, ZAP baseline
