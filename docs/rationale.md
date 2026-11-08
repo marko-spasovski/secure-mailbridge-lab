@@ -1635,3 +1635,15 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** None beyond two more routes to keep in step with the subnet list.
 
 **Verify.** From vuln, TCP 443 to db, app and mon each produce `FW-DROP SRC=10.0.6.10` on fw-ips (before: only mon did); `terraform plan` is clean afterwards.
+
+## 132. All attacks in Tier 2 (2026-11-08)
+
+**Problem.** Phase 2 mixed building and attacking: the Juice Shop block built the target and then pentested it, and the Mailbridge scenarios followed, all before the Tier 1 close-out and write-up.
+
+**Options.** A: Tier 1 is build and learn only; the attacker tooling, the Juice Shop pentest and the Mailbridge scenarios all move to Tier 2. B: only the tooling and the Juice Shop pentest move. C: keep the order.
+
+**Chosen: A**, decided by Marko. Tier 1 now ends with a lab that is fully built, monitored, rebuilt from clean and documented: Juice Shop's host, proxy server, WAF and Wazuh rules (2.10 to 2.13), then CloudTrail and GuardDuty, the end-to-end check, the rebuild and the docs pass (1.18 to 1.21). Tier 2 then opens with the attacks, in decision 83's order: the attacker certificate, scope wrapper and browser profile (2.14), the Juice Shop pentest (2.15), and the Mailbridge scenarios (2.2 to 2.5). Knowing how every layer behaves first means each finding can be traced to the layer that stopped, saw or missed it. B would leave attacks on Mailbridge inside Tier 1. C attacks before the lab has been rebuilt from clean.
+
+**Trade-off accepted.** No attack results until Tier 2; the Tier 1 write-up describes defences that haven't been tested by an attacker yet.
+
+**Verify.** TASKS lists 2.14, 2.15 and 2.2 to 2.5 under Tier 2; CLAUDE.md and ARCHITECTURE §12 say Tier 1 has no attacks.
