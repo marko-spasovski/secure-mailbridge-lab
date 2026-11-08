@@ -1,0 +1,19 @@
+# {{ ansible_managed }}
+# YACE on mon (task 1.23, decision 121): the lab's instances, found by tag,
+# and the one metric the guest can't see. EC2's basic monitoring publishes
+# it every 5 minutes, so YACE asks no more often than that.
+apiVersion: v1alpha1
+discovery:
+  exportedTagsOnMetrics:
+    AWS/EC2: [Name]
+  jobs:
+    - type: AWS/EC2
+      regions: [eu-central-1]
+      searchTags:
+        - key: Project
+          value: mailbridge-lab
+      period: 300
+      length: 900
+      metrics:
+        - name: CPUCreditBalance
+          statistics: [Minimum]

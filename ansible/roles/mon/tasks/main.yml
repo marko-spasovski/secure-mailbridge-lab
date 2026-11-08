@@ -15,5 +15,8 @@
 - name: Install and configure blackbox_exporter
   ansible.builtin.import_tasks: blackbox.yml
 
+- name: Install and configure YACE
+  ansible.builtin.import_tasks: yace.yml
+
 - name: Install and configure Grafana
   ansible.builtin.import_tasks: grafana.yml

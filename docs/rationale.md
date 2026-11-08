@@ -1522,7 +1522,9 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 
 **Trade-off accepted.** One more exporter and a broad-looking, read-only IAM statement; CloudWatch data lags by about 5 minutes.
 
-**Verify (once built).** The IAM simulator allows the three read actions and denies `cloudwatch:PutMetricData`; Prometheus has `aws_ec2_cpucredit_balance` for all six instances.
+**Built (3d, 2026-11-08).** YACE 0.68.0 on 127.0.0.1:5000 discovers `AWS/EC2` instances by `Project=mailbridge-lab` and reads `CPUCreditBalance` (minimum per 5 minutes) every 300 s, the rate basic monitoring publishes it. The inline policy `mon-read-cloudwatch` allows exactly `cloudwatch:GetMetricData`, `cloudwatch:ListMetrics` and `tag:GetResources`; YACE's README lists more for other services and `GetMetricStatistics` for a mode we don't use, all left out. Prometheus drops the `account_id`, `name` (an ARN with the account ID) and `dimension_InstanceId` labels at scrape time, so neither the account nor a live resource ID can reach a dashboard screenshot in the public repo, and copies `tag_Name` into `host` to match node_exporter.
+
+**Verify (once built).** The IAM simulator allows the three read actions and returns `implicitDeny` on `cloudwatch:PutMetricData`, `cloudwatch:DeleteAlarms`, `logs:GetLogEvents` and `ec2:DescribeInstances`; Prometheus has `aws_ec2_cpucredit_balance_minimum` for all six hosts with none of the dropped labels. Tested on the laptop with read-only access: six balances (42 to 128) and only `host`, `instance`, `job`, `region`, `tag_Name` left after relabeling.
 
 ## 122. One dashboard of our own (2026-11-08)
 

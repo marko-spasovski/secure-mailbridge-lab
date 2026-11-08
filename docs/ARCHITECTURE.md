@@ -220,7 +220,7 @@ The vuln subnet has no rule to data, app or mgmt, so db, Mailbridge and Wazuh's 
 - All traffic metadata → S3 bucket in `persistent`, 30-day lifecycle. Used for investigation, including traffic that never crosses fw-ips. Not fed to Wazuh in Tier 1, including for Juice Shop.
 
 **Health (Prometheus/Grafana — "is everything healthy?")** — Tier 1, after Wazuh (decision 84)
-- node_exporter on all VMs, postgres_exporter on db, blackbox_exporter probing `https://mail.<domain>` (pinned tarballs, decision 120; the probe goes to proxy by address with SNI and Host and verifies against the pinned staging root, plus a DNS probe of Unbound, decision 125); CPU credit balances from CloudWatch through YACE (decision 121); one provisioned dashboard, "Lab health" (decision 122)
+- node_exporter on all VMs, postgres_exporter on db, blackbox_exporter probing `https://mail.<domain>` (pinned tarballs, decision 120; the probe goes to proxy by address with SNI and Host and verifies against the pinned staging root, plus a DNS probe of Unbound, decision 125); CPU credit balances from CloudWatch through YACE on mon, with a read-only `mon-read-cloudwatch` policy, account and instance IDs dropped from labels (decision 121); one provisioned dashboard, "Lab health" (decision 122)
 - Alertmanager → email/Discord: host down, disk > 80%, cert expiry < 14 days, probe failing, CPU credit balance near 0 (t3 `standard` credits, decision 84)
 - The vuln host is scraped across fw-ips (decision 68): nftables allows 10.0.5.20 → 10.0.6.10:9100, and the security group names mon's IP
 
