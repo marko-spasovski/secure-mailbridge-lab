@@ -7,5 +7,6 @@ output "security_group_ids" {
     db    = aws_security_group.db.id
     siem  = aws_security_group.siem.id
     mon   = aws_security_group.mon.id
+    vuln  = aws_security_group.vuln.id
   }
 }

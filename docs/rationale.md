@@ -1587,3 +1587,15 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** Unit tests prove the rule logic, not the metric pipeline; the live tests and the targets being `up` cover that part.
 
 **Verify (once built).** `promtool test rules` reports `SUCCESS` on mon; stopping node_exporter on app sends `TargetDown` to Discord within about 3 minutes and `RESOLVED` after it starts; an `amtool alert add` test reaches the channel; the URL appears in no log, no `ps` output and no Ansible output.
+
+## 127. Building the vuln network in code first (2026-11-08)
+
+**Problem.** Decision 11 builds each layer by hand, compares it with code and rebuilds it, and TASKS 2.8 said "built by hand, then imported". The vuln network is a subnet, a route table, a security group, a NACL and additions to existing ones.
+
+**Options.** A: write it in Terraform and review the plan, then prove the one new concept live. B: build it in the console and import it, as TASKS said.
+
+**Chosen: A**, decided by Marko. Every resource type here was built by hand and imported in 1.5a, so a second hand build repeats steps already learned; decision 11's purpose, knowing what the console does before automating it, is met. The new concept is routing: a route for a whole subnet's CIDR that is more specific than the VPC's `local` route, which AWS has allowed since 2021, so the longest prefix wins and traffic between vuln and the rest of the VPC goes through fw-ips. That is proven better on the wire than in the console: a capture on fw-ips shows proxy's SYN to 10.0.6.10 arriving there (and nftables dropping it until 2.9), while proxy's traffic to app never appears. The plan was reviewed line by line: 31 resources, nothing changed or destroyed. Rules on the vuln paths name addresses, not groups: after the detour a packet arrives from fw-ips's ENI, so a group reference can't match its original sender (decision 68). The vuln NACL also gets mon's 9100 pair and replies (decision 120), so the host can be scraped like the others.
+
+**Trade-off accepted.** No console practice for route tables with more specific routes; the import step of decision 11 is skipped for this layer.
+
+**Verify.** The plan's 31 resources exist; `tcpdump` on fw-ips sees proxy → 10.0.6.10:3000 and nftables logs it as `FW-DROP` (until 2.9); proxy → app traffic is absent from fw-ips's capture; the next plan is clean.
