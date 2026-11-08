@@ -1,0 +1,36 @@
+# {{ ansible_managed }}
+# blackbox_exporter on mon (task 1.23, decision 125).
+modules:
+  # What a VPN user gets: proxy by address, with the name Nginx expects in
+  # SNI and Host, through ModSecurity to app's /healthz. The certificate is
+  # verified against {{ mon_blackbox_ca_file }}.
+  https_mail:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      valid_status_codes: [200]
+      fail_if_not_ssl: true
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: false
+      headers:
+        Host: mail.{{ domain }}
+      tls_config:
+        server_name: mail.{{ domain }}
+        ca_file: {{ mon_blackbox_ca_file }}
+        min_version: TLS13
+
+  # Unbound must still give VPN users the private address of mail.
+  dns_mail:
+    prober: dns
+    timeout: 5s
+    dns:
+      query_name: mail.{{ domain }}
+      query_type: A
+      transport_protocol: udp
+      preferred_ip_protocol: ip4
+      ip_protocol_fallback: false
+      valid_rcodes: [NOERROR]
+      validate_answer_rrs:
+        fail_if_not_matches_regexp:
+          - '^mail\.{{ domain | regex_escape }}\.\s+\d+\s+IN\s+A\s+{{ mon_proxy_ip | regex_escape }}$'

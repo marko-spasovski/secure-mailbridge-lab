@@ -32,3 +32,25 @@ scrape_configs:
       - targets: ["{{ mon_postgres_target }}"]
         labels:
           host: db
+
+  # Probes through blackbox_exporter on loopback (decision 125): the target
+  # becomes a parameter, and the instance label keeps the probed address.
+  - job_name: blackbox
+    scrape_interval: 30s
+    metrics_path: /probe
+    static_configs:
+      - targets: ["https://{{ mon_proxy_ip }}/healthz"]
+        labels:
+          module: https_mail
+      - targets: ["{{ mon_unbound_ip }}"]
+        labels:
+          module: dns_mail
+    relabel_configs:
+      - source_labels: [module]
+        target_label: __param_module
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: "{{ mon_blackbox_listen }}"

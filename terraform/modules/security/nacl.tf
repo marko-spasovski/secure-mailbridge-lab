@@ -53,7 +53,11 @@ locals {
       ] : [],
     )
     dmz = concat(
-      [{ number = 100, action = "allow", protocol = local.tcp, cidr = var.vpn_pools_cidr, from = 443, to = 443 }],
+      [
+        { number = 100, action = "allow", protocol = local.tcp, cidr = var.vpn_pools_cidr, from = 443, to = 443 },
+        # mon's HTTPS probe (decisions 84, 125).
+        { number = 105, action = "allow", protocol = local.tcp, cidr = local.mon, from = 443, to = 443 },
+      ],
       local.node_exporter_inbound,
       [
         merge(local.return_inbound[0], { number = 110, action = "allow" }),

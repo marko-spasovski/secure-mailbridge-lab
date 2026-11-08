@@ -1559,3 +1559,15 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** Anyone who can run a process as the OS user `postgres_exporter` gets its statistics; that already requires root on db.
 
 **Verify (once built).** The `postgres` target is `up` and `pg_up` is 1; `ss -tlnp` shows 9187 on 10.0.4.10 only; `sudo -u postgres_exporter psql -h /var/run/postgresql -d mailbridge` is refused by `pg_hba.conf`; `psql -U postgres_exporter -d postgres` as `ubuntu` fails with `Peer authentication failed`; as `postgres_exporter`, `SELECT` on a Mailbridge table is refused.
+
+## 125. What blackbox_exporter probes, and how (2026-11-08)
+
+**Problem.** §9 asks for a probe of `https://mail.<domain>` and an alert when the certificate has fewer than 14 days left. mon can't resolve `mail.<domain>`: private hosts use AmazonProvidedDNS (decision 25), and only Unbound on fw-ips knows the private name. The proxy's certificate is from Let's Encrypt staging, which no system trust store accepts.
+
+**Options.** A: probe proxy by address with the expected name in SNI and `Host`, verify against the pinned staging root, and probe Unbound separately for the name. B: point mon's resolver at Unbound. C: an `/etc/hosts` line on mon.
+
+**Chosen: A**, approved by Marko. The HTTPS probe reaches exactly what a VPN user reaches: Nginx picks the server by SNI and `Host`, ModSecurity inspects the request, and `/healthz` answers from app, so a 200 proves the whole chain. The certificate is verified, not skipped: the staging root "(STAGING) Pretend Pear X1" is downloaded by mon from letsencrypt.org and pinned by SHA-256 like the apt keys; when Let's Encrypt moves to production the variable points at the system store and the download is skipped. The DNS probe asks Unbound for the name and passes only on `10.0.2.10`, so a broken resolver and a broken proxy show up as different failures. B changes DNS for one host to fix a gap that belongs to all of them (scenario 2.2). C is a second copy of DNS that goes stale without warning. The network rows were already in §4 (decision 84): sg-proxy and dmz NACL 105 admit 443 from 10.0.5.20/32; replies use dmz's outbound 170 from decision 120.
+
+**Trade-off accepted.** The HTTPS probe doesn't test name resolution itself, which is why the DNS probe exists. It adds two requests a minute to Nginx's logs.
+
+**Verify (once built).** `probe_success` is 1 for both modules, `probe_http_status_code` 200, `probe_tls_version_info{version="TLS 1.3"}` 1, and the days left from `probe_ssl_earliest_cert_expiry` match `openssl x509 -enddate`. Tested from the laptop in the admin pool first: 200 over TLS 1.3, 63.8 days left, DNS answer matched; the same probe against the system store failed with `x509: certificate signed by unknown authority`.
