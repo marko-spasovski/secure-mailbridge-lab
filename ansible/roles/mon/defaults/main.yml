@@ -67,3 +67,22 @@ mon_node_targets:
 
 # postgres_exporter on db (task 1.23, decision 124).
 mon_postgres_target: "10.0.4.10:9187"
+
+# blackbox_exporter (task 1.23, decisions 120, 125), pinned like the others.
+mon_blackbox_version: 0.29.1
+mon_blackbox_archive: blackbox_exporter-{{ mon_blackbox_version }}.linux-amd64.tar.gz
+mon_blackbox_sha256: b82b81839e6317e84fdd367f46d7ddd3b773fa09cbe2e3d5633a59171d741e76
+mon_blackbox_listen: 127.0.0.1:9115
+
+# What the probes check: proxy by address (decision 125), Unbound for DNS.
+mon_proxy_ip: 10.0.2.10
+mon_unbound_ip: 10.0.1.10
+
+# The trust anchor for proxy's certificate. While Let's Encrypt is on
+# staging (CLAUDE.md), that's the staging root "(STAGING) Pretend Pear X1",
+# pinned by SHA-256 (expires 2035-06-04). After the switch to production,
+# set mon_blackbox_ca_file to /etc/ssl/certs/ca-certificates.crt and the
+# download is skipped.
+mon_blackbox_ca_url: https://letsencrypt.org/certs/staging/letsencrypt-stg-root-x1.pem
+mon_blackbox_ca_sha256: 3a5e1171e5f5c2d41522d438f225602e4236a68fb29c32399a95921a4ae80e73
+mon_blackbox_ca_file: /etc/blackbox_exporter/le-staging-root-x1.pem

@@ -176,6 +176,15 @@ resource "aws_vpc_security_group_ingress_rule" "postgres_exporter_from_mon" {
   to_port                      = 9187
 }
 
+resource "aws_vpc_security_group_ingress_rule" "proxy_from_mon_probe" {
+  security_group_id = aws_security_group.proxy.id
+  description       = "HTTPS probe from mon's blackbox_exporter"
+  cidr_ipv4         = "${var.mon_private_ip}/32"
+  ip_protocol       = "tcp"
+  from_port         = 443
+  to_port           = 443
+}
+
 # --- Egress ---
 
 resource "aws_vpc_security_group_egress_rule" "fw_all" {

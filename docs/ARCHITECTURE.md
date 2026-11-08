@@ -112,7 +112,7 @@ All instances: IMDSv2 required · SSM agent (admin access; Ansible uses SSH tunn
 | sg-proxy | TCP 8443 | Marko's public IP /32 — **Juice Shop test windows only** (decision 72) |
 | all | TCP 9100 (node_exporter), 9187 (postgres_exporter on db) | sg-mon |
 
-mon's scrape and probe rules are built with the exporters in 1.23: 9100 in 3a (the rows above, sg-mon egress to each scraped group and to 10.0.1.10, and an nftables input rule on fw-ips; decision 120), 9187 in 3b (sg-db from sg-mon, data NACL 108/109; postgres_exporter logs in by peer authentication, decision 124) and 443 to proxy in 3c; Grafana's row, sg-mon's egress and the mgmt NACL's 112/115 are built in 1.22 (decision 111).
+mon's scrape and probe rules are built with the exporters in 1.23: 9100 in 3a (the rows above, sg-mon egress to each scraped group and to 10.0.1.10, and an nftables input rule on fw-ips; decision 120), 9187 in 3b (sg-db from sg-mon, data NACL 108/109; postgres_exporter logs in by peer authentication, decision 124) and 443 to proxy in 3c (sg-proxy and dmz NACL 105 from 10.0.5.20/32; the probe targets proxy by address with SNI and Host, decision 125); Grafana's row, sg-mon's egress and the mgmt NACL's 112/115 are built in 1.22 (decision 111).
 
 **Egress (explicit, stateful replies need no rule):**
 
@@ -220,7 +220,7 @@ The vuln subnet has no rule to data, app or mgmt, so db, Mailbridge and Wazuh's 
 - All traffic metadata → S3 bucket in `persistent`, 30-day lifecycle. Used for investigation, including traffic that never crosses fw-ips. Not fed to Wazuh in Tier 1, including for Juice Shop.
 
 **Health (Prometheus/Grafana — "is everything healthy?")** — Tier 1, after Wazuh (decision 84)
-- node_exporter on all VMs, postgres_exporter on db, blackbox_exporter probing `https://mail.<domain>` (pinned tarballs, decision 120); CPU credit balances from CloudWatch through YACE (decision 121); one provisioned dashboard, "Lab health" (decision 122)
+- node_exporter on all VMs, postgres_exporter on db, blackbox_exporter probing `https://mail.<domain>` (pinned tarballs, decision 120; the probe goes to proxy by address with SNI and Host and verifies against the pinned staging root, plus a DNS probe of Unbound, decision 125); CPU credit balances from CloudWatch through YACE (decision 121); one provisioned dashboard, "Lab health" (decision 122)
 - Alertmanager → email/Discord: host down, disk > 80%, cert expiry < 14 days, probe failing, CPU credit balance near 0 (t3 `standard` credits, decision 84)
 - The vuln host is scraped across fw-ips (decision 68): nftables allows 10.0.5.20 → 10.0.6.10:9100, and the security group names mon's IP
 

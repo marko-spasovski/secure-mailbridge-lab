@@ -1,0 +1,97 @@
+---
+# blackbox_exporter from the pinned release tarball (task 1.23, decisions
+# 120, 125). Probes proxy over HTTPS and Unbound over DNS for Prometheus.
+
+- name: Check that the lab domain is set
+  ansible.builtin.assert:
+    that: domain is defined and domain is match('^[a-z0-9.-]+$')
+    fail_msg: Set domain in group_vars/all/domain.yml (see domain.yml.example).
+    quiet: true
+
+- name: Create the blackbox_exporter system user
+  ansible.builtin.user:
+    name: blackbox_exporter
+    system: true
+    shell: /usr/sbin/nologin
+    home: /nonexistent
+    create_home: false
+
+- name: Create the blackbox_exporter download, install and config directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - /var/cache/blackbox_exporter
+    - /opt/blackbox_exporter/{{ mon_blackbox_version }}
+    - /etc/blackbox_exporter
+
+- name: Download the pinned blackbox_exporter release
+  ansible.builtin.get_url:
+    url: https://github.com/prometheus/blackbox_exporter/releases/download/v{{ mon_blackbox_version }}/{{ mon_blackbox_archive }}
+    dest: /var/cache/blackbox_exporter/{{ mon_blackbox_archive }}
+    checksum: sha256:{{ mon_blackbox_sha256 }}
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Unpack blackbox_exporter
+  ansible.builtin.unarchive:
+    src: /var/cache/blackbox_exporter/{{ mon_blackbox_archive }}
+    dest: /opt/blackbox_exporter/{{ mon_blackbox_version }}
+    remote_src: true
+    extra_opts: [--strip-components=1]
+    include:
+      - blackbox_exporter-{{ mon_blackbox_version }}.linux-amd64/blackbox_exporter
+    owner: root
+    group: root
+    creates: /opt/blackbox_exporter/{{ mon_blackbox_version }}/blackbox_exporter
+
+- name: Link the pinned blackbox_exporter into the PATH
+  ansible.builtin.file:
+    src: /opt/blackbox_exporter/{{ mon_blackbox_version }}/blackbox_exporter
+    dest: /usr/local/bin/blackbox_exporter
+    state: link
+  notify: Restart blackbox_exporter
+
+# The staging root, pinned like the apt keys; skipped once production uses
+# the system store (decision 125).
+- name: Download the trust anchor for proxy's certificate
+  ansible.builtin.get_url:
+    url: "{{ mon_blackbox_ca_url }}"
+    dest: "{{ mon_blackbox_ca_file }}"
+    checksum: sha256:{{ mon_blackbox_ca_sha256 }}
+    owner: root
+    group: root
+    mode: "0644"
+  when: mon_blackbox_ca_file.startswith('/etc/blackbox_exporter/')
+  notify: Restart blackbox_exporter
+
+# blackbox_exporter checks the rendered file before it replaces the old one.
+- name: Write blackbox_exporter's config
+  ansible.builtin.template:
+    src: blackbox.yml.j2
+    dest: /etc/blackbox_exporter/blackbox.yml
+    owner: root
+    group: blackbox_exporter
+    mode: "0640"
+    validate: /usr/local/bin/blackbox_exporter --config.check --config.file=%s
+  notify: Reload blackbox_exporter
+
+- name: Install the blackbox_exporter unit
+  ansible.builtin.template:
+    src: blackbox_exporter.service.j2
+    dest: /etc/systemd/system/blackbox_exporter.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart blackbox_exporter
+
+- name: Enable and start blackbox_exporter
+  ansible.builtin.systemd_service:
+    name: blackbox_exporter
+    enabled: true
+    state: started
+    daemon_reload: true
