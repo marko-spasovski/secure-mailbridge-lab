@@ -123,12 +123,16 @@ resource "aws_route_table" "vuln" {
   tags = { Name = "${var.name}-vuln" }
 }
 
-# Internet (SSM, ECR) and the two subnets vuln talks to (proxy's dmz for
-# replies, siem's mgmt for its Wazuh agent and mon's scrapes), all via fw-ips.
+# Internet (SSM, ECR) and every other private subnet, all via fw-ips: dmz
+# and mgmt carry vuln's real traffic (proxy, siem, mon); app and data carry
+# none, and are listed so an attempt to reach them is dropped and logged on
+# fw-ips instead of going straight there over the local route (decision 131).
 resource "aws_route" "vuln" {
   for_each = {
     internet = "0.0.0.0/0"
     dmz      = var.subnet_cidrs["dmz"]
+    app      = var.subnet_cidrs["app"]
+    data     = var.subnet_cidrs["data"]
     mgmt     = var.subnet_cidrs["mgmt"]
   }
 
