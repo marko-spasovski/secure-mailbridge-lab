@@ -125,6 +125,32 @@
     mode: "0640"
   notify: Restart Grafana
 
+# The "Lab health" dashboard (decision 122), read-only in the UI.
+- name: Create the dashboards directory
+  ansible.builtin.file:
+    path: /etc/grafana/dashboards
+    state: directory
+    owner: root
+    group: grafana
+    mode: "0750"
+
+- name: Install the Lab health dashboard
+  ansible.builtin.copy:
+    src: lab-health.json
+    dest: /etc/grafana/dashboards/lab-health.json
+    owner: root
+    group: grafana
+    mode: "0640"
+
+- name: Provision the dashboards directory
+  ansible.builtin.template:
+    src: dashboards.yml.j2
+    dest: /etc/grafana/provisioning/dashboards/lab.yml
+    owner: root
+    group: grafana
+    mode: "0640"
+  notify: Restart Grafana
+
 - name: Apply Grafana's settings before it starts
   ansible.builtin.meta: flush_handlers
 

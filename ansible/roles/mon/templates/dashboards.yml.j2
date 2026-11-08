@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+# Grafana's dashboard provider (decision 122): dashboards come only from the
+# repo's files, can't be deleted in the UI, and UI edits can't be saved.
+apiVersion: 1
+
+providers:
+  - name: lab
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards
