@@ -25,6 +25,7 @@ variable "subnet_cidrs" {
     app    = "10.0.3.0/24"
     data   = "10.0.4.0/24"
     mgmt   = "10.0.5.0/24"
+    vuln   = "10.0.6.0/24"
   }
 }
 

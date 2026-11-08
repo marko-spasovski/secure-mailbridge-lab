@@ -58,3 +58,21 @@ variable "mon_private_ip" {
   type        = string
   default     = "10.0.5.20"
 }
+
+variable "proxy_private_ip" {
+  description = "proxy's fixed address: sg-vuln and the vuln NACL admit it by IP, because its traffic reaches vuln through fw-ips (decision 68)."
+  type        = string
+  default     = "10.0.2.10"
+}
+
+variable "siem_private_ip" {
+  description = "siem's fixed address: the Juice Shop host's Wazuh agent reaches it through fw-ips, so sg-vuln names the IP (decision 68)."
+  type        = string
+  default     = "10.0.5.10"
+}
+
+variable "vuln_private_ip" {
+  description = "The Juice Shop host's fixed address (ARCHITECTURE.md §1, decision 67)."
+  type        = string
+  default     = "10.0.6.10"
+}

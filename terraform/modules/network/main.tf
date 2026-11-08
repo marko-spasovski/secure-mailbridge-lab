@@ -1,6 +1,7 @@
 locals {
-  # Every subnet except public sends its traffic through fw-ips.
-  private_subnets = { for name, cidr in var.subnet_cidrs : name => cidr if name != "public" }
+  # Every subnet except public sends its traffic through fw-ips. vuln has its
+  # own route table (decision 68), so it isn't on the shared private one.
+  private_subnets = { for name, cidr in var.subnet_cidrs : name => cidr if !contains(["public", "vuln"], name) }
 }
 
 resource "aws_vpc" "this" {
@@ -100,3 +101,46 @@ resource "aws_route_table_association" "private" {
   subnet_id      = aws_subnet.this[each.key].id
   route_table_id = aws_route_table.private.id
 }
+
+# --- Juice Shop (decisions 67, 68) -------------------------------------------
+# Routes more specific than the VPC's local route, which AWS allows for whole
+# subnet CIDRs: everything between vuln and the rest of the VPC goes through
+# fw-ips, so nftables and Suricata see it. Both directions use fw-ips, or it
+# would see half of each connection and drop it as invalid.
+
+resource "aws_route" "private_to_vuln" {
+  route_table_id         = aws_route_table.private.id
+  destination_cidr_block = var.subnet_cidrs["vuln"]
+  network_interface_id   = aws_network_interface.fw.id
+
+  # The destination must be an existing subnet's CIDR.
+  depends_on = [aws_subnet.this]
+}
+
+resource "aws_route_table" "vuln" {
+  vpc_id = aws_vpc.this.id
+
+  tags = { Name = "${var.name}-vuln" }
+}
+
+# Internet (SSM, ECR) and the two subnets vuln talks to (proxy's dmz for
+# replies, siem's mgmt for its Wazuh agent and mon's scrapes), all via fw-ips.
+resource "aws_route" "vuln" {
+  for_each = {
+    internet = "0.0.0.0/0"
+    dmz      = var.subnet_cidrs["dmz"]
+    mgmt     = var.subnet_cidrs["mgmt"]
+  }
+
+  route_table_id         = aws_route_table.vuln.id
+  destination_cidr_block = each.value
+  network_interface_id   = aws_network_interface.fw.id
+
+  depends_on = [aws_subnet.this]
+}
+
+resource "aws_route_table_association" "vuln" {
+  subnet_id      = aws_subnet.this["vuln"].id
+  route_table_id = aws_route_table.vuln.id
+}
+

@@ -71,6 +71,13 @@ resource "aws_security_group" "mon" {
   vpc_id      = var.vpc_id
 }
 
+resource "aws_security_group" "vuln" {
+  #checkov:skip=CKV2_AWS_5:Attached by the compute module when vuln_enabled is on (task 2.10).
+  name        = "${var.name}-vuln"
+  description = "vuln: Juice Shop, reachable from proxy only, through fw-ips"
+  vpc_id      = var.vpc_id
+}
+
 # --- Ingress ---
 
 resource "aws_vpc_security_group_ingress_rule" "fw_openvpn" {
@@ -185,6 +192,27 @@ resource "aws_vpc_security_group_ingress_rule" "proxy_from_mon_probe" {
   to_port           = 443
 }
 
+# Juice Shop (decisions 67, 68). Traffic to and from vuln crosses fw-ips, so
+# packets arrive from fw-ips's ENI and a group reference would never match:
+# every rule on these paths names an address.
+resource "aws_vpc_security_group_ingress_rule" "vuln_from_proxy" {
+  security_group_id = aws_security_group.vuln.id
+  description       = "Juice Shop from proxy"
+  cidr_ipv4         = "${var.proxy_private_ip}/32"
+  ip_protocol       = "tcp"
+  from_port         = 3000
+  to_port           = 3000
+}
+
+resource "aws_vpc_security_group_ingress_rule" "vuln_node_exporter_from_mon" {
+  security_group_id = aws_security_group.vuln.id
+  description       = "node_exporter from mon"
+  cidr_ipv4         = "${var.mon_private_ip}/32"
+  ip_protocol       = "tcp"
+  from_port         = 9100
+  to_port           = 9100
+}
+
 # --- Egress ---
 
 resource "aws_vpc_security_group_egress_rule" "fw_all" {
@@ -296,3 +324,55 @@ resource "aws_vpc_security_group_egress_rule" "mon_to_postgres_exporter" {
   from_port                    = 9187
   to_port                      = 9187
 }
+
+# --- Juice Shop egress (decisions 67, 68, 69) ---
+
+# SSM, ECR and S3 image layers, through fw-ips and logged there; not
+# filterable by name at this layer.
+resource "aws_vpc_security_group_egress_rule" "vuln_https" {
+  security_group_id = aws_security_group.vuln.id
+  description       = "HTTPS to the internet through fw-ips"
+  cidr_ipv4         = "0.0.0.0/0"
+  ip_protocol       = "tcp"
+  from_port         = 443
+  to_port           = 443
+}
+
+resource "aws_vpc_security_group_egress_rule" "vuln_ntp" {
+  security_group_id = aws_security_group.vuln.id
+  description       = "NTP through fw-ips"
+  cidr_ipv4         = "0.0.0.0/0"
+  ip_protocol       = "udp"
+  from_port         = 123
+  to_port           = 123
+}
+
+resource "aws_vpc_security_group_egress_rule" "vuln_wazuh_agent" {
+  for_each = toset([for port in local.agent_ports : tostring(port)])
+
+  security_group_id = aws_security_group.vuln.id
+  description       = "Wazuh agent to siem through fw-ips"
+  cidr_ipv4         = "${var.siem_private_ip}/32"
+  ip_protocol       = "tcp"
+  from_port         = tonumber(each.value)
+  to_port           = tonumber(each.value)
+}
+
+resource "aws_vpc_security_group_egress_rule" "proxy_to_vuln" {
+  security_group_id = aws_security_group.proxy.id
+  description       = "Juice Shop upstream through fw-ips"
+  cidr_ipv4         = "${var.vuln_private_ip}/32"
+  ip_protocol       = "tcp"
+  from_port         = 3000
+  to_port           = 3000
+}
+
+resource "aws_vpc_security_group_egress_rule" "mon_to_vuln_node_exporter" {
+  security_group_id = aws_security_group.mon.id
+  description       = "Scrape node_exporter on vuln through fw-ips"
+  cidr_ipv4         = "${var.vuln_private_ip}/32"
+  ip_protocol       = "tcp"
+  from_port         = 9100
+  to_port           = 9100
+}
+

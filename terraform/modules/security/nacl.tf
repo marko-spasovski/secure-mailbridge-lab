@@ -101,6 +101,19 @@ locals {
       merge(local.return_inbound[0], { number = 120, action = "allow" }),
       merge(local.return_inbound[1], { number = 130, action = "allow" }),
     ]
+    # Juice Shop (decisions 67, 68): Juice Shop from dmz only, and mon's
+    # scrapes; no rule from data, app or mgmt's other hosts.
+    vuln = concat(
+      [
+        { number = 100, action = "allow", protocol = local.tcp, cidr = var.subnet_cidrs["dmz"], from = 3000, to = 3000 },
+        { number = 105, action = "deny", protocol = local.tcp, cidr = local.any, from = 3000, to = 3000 },
+      ],
+      local.node_exporter_inbound,
+      [
+        merge(local.return_inbound[0], { number = 110, action = "allow" }),
+        merge(local.return_inbound[1], { number = 120, action = "allow" }),
+      ],
+    )
   }
 
   nacl_outbound = {
@@ -117,6 +130,7 @@ locals {
     )
     dmz = concat(local.baseline_outbound, [
       { number = 100, protocol = local.tcp, cidr = var.subnet_cidrs["app"], from = 3000, to = 3000 },
+      { number = 105, protocol = local.tcp, cidr = var.subnet_cidrs["vuln"], from = 3000, to = 3000 },
       local.agents_outbound,
       { number = 160, protocol = local.tcp, cidr = var.vpn_pools_cidr, from = local.ephemeral.from, to = local.ephemeral.to },
       local.replies_to_mon,
@@ -135,6 +149,11 @@ locals {
     mgmt = concat(local.baseline_outbound, [
       { number = 160, protocol = local.tcp, cidr = var.vpc_cidr, from = local.ephemeral.from, to = local.ephemeral.to },
       { number = 170, protocol = local.tcp, cidr = var.admin_pool_cidr, from = local.ephemeral.from, to = local.ephemeral.to },
+    ])
+    vuln = concat(local.baseline_outbound, [
+      local.agents_outbound,
+      { number = 160, protocol = local.tcp, cidr = var.subnet_cidrs["dmz"], from = local.ephemeral.from, to = local.ephemeral.to },
+      local.replies_to_mon,
     ])
   }
 

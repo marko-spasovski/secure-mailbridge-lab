@@ -125,6 +125,7 @@ mon's scrape and probe rules are built with the exporters in 1.23: 9100 in 3a (t
 | sg-proxy | TCP 3000 | sg-app |
 | sg-app | TCP 5432 | sg-db |
 | sg-proxy | TCP 3000 | 10.0.6.10/32 (Juice Shop, by IP) |
+| sg-mon | TCP 9100 | 10.0.6.10/32 (vuln's node_exporter, by IP: decision 127) |
 | sg-vuln | TCP 443, UDP 123 | 0.0.0.0/0 (through fw-ips, logged; used for SSM, ECR and S3 image layers, not destination-filtered by name) |
 | | TCP 1514, 1515 | 10.0.5.10/32 (siem, by IP: the path crosses fw-ips) |
 
@@ -148,7 +149,7 @@ Baseline outbound: 110 TCP 443 to 0.0.0.0/0 · 120 UDP 123 to 0.0.0.0/0 · 130 U
 
 | Subnet | Inbound | Outbound |
 |---|---|---|
-| vuln (new) | 100 TCP 3000 from 10.0.2.0/24 · 105 deny TCP 3000 from 0.0.0.0/0 · 110 TCP eph from 0.0.0.0/0 · 120 UDP eph from 0.0.0.0/0 | baseline · 150 agents · 160 TCP eph to 10.0.2.0/24 |
+| vuln (new) | 100 TCP 3000 from 10.0.2.0/24 · 105 deny TCP 3000 from 0.0.0.0/0 · 106 TCP 9100 from 10.0.5.20/32 · 107 deny TCP 9100 from 0.0.0.0/0 · 110 TCP eph from 0.0.0.0/0 · 120 UDP eph from 0.0.0.0/0 | baseline · 150 agents · 160 TCP eph to 10.0.2.0/24 · 170 TCP eph to 10.0.5.20/32 |
 | dmz (added) | 105 TCP 443 from 10.0.5.20/32 (mon's probe, decision 84) · window only: TCP 8443 from Marko's /32 | 105 TCP 3000 to 10.0.6.0/24 · window only: TCP eph to Marko's /32 |
 
 The vuln subnet has no rule to data, app or mgmt, so db, Mailbridge and Wazuh's dashboard are refused at its NACL as well as at its security group and on fw-ips. A Juice Shop window also needs inbound TCP 443 from Marko's /32 on public.
