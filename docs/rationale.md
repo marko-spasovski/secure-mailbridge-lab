@@ -1769,3 +1769,15 @@ For the server block: the same TLS 1.3, HSTS, `server_tokens` and ModSecurity co
 **Trade-off accepted.** Tier 1 closes without a threat model, so the Tier 1 write-up describes controls without the threats they answer; the write-up says so and points to 2.17.
 
 **Verify.** TASKS lists 0.7 as moved and 2.17 first in Tier 2; ARCHITECTURE §13 names it before the attacks; 2.14 doesn't start until 2.17 is reviewed.
+
+## 142. The Makefile: reviewed plans only (2026-11-09)
+
+**Problem.** "Done" in CLAUDE.md means "deploys with `make up`", and task 1.20 rebuilds the lab with it, but the session routine was a list of commands run by hand: plan, apply, wait for cloud-init, two `site.yml` runs, VPN checks; at the end evidence, a Wazuh and Prometheus stop typed on the hosts, the teardown and a check. Steps were skipped or reordered under time pressure, and the stop had no written form at all. The hard rule stays: no Terraform apply without Marko's review.
+
+**Options.** A: separate `plan-up`/`plan-down` targets that save a plan, and `up`/`down` that apply only that saved file. B: one `make up` with an interactive `terraform apply`. C: Ansible only, with Terraform kept by hand.
+
+**Chosen: A**, decided by Marko. A saved plan is exactly what gets applied: Terraform refuses it if the state moved (the "stale plan" seen the same day), and the Makefile deletes it after use, so it can't be applied twice. The review happens on a printed plan, not mid-run where B's `yes` prompt invites a rubber stamp. C wouldn't meet "deploys with `make up`". Make is only a task runner (all targets `.PHONY`), with `bash -euo pipefail`, so the first failing step stops the run. `up` turns idempotence into a gate: it greps the second run's recap for `changed=[1-9]`. The stop moves into `stop.yml`, so the indexer flush is checked (`_shards.failed == 0`) before anything is stopped; if it fails, nothing is stopped and the volume stays attached.
+
+**Trade-off accepted.** Two commands per transition instead of one. `verify` needs the VPN for its last checks and isn't a full test suite: it checks reachability, services and the empty plan, not every rule. `make` reads the real domain from the gitignored `group_vars/all/domain.yml`, so a fresh clone needs that file first.
+
+**Verify.** `make -n up` prints the steps without running them; `make verify` on a running lab ends with `verify: all checks passed`; `make up` without a saved plan stops with "make plan-up first"; at the next teardown `make down` gives `failed: 0`, the destroy count from `plan-down`, and `left: 0 instances, 0 Elastic IPs`.
