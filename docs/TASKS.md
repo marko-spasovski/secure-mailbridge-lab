@@ -267,6 +267,7 @@ Targets: own deployment only, never Google/Microsoft APIs. Each one follows atta
 - [ ] **1.20** Includes the deferred network rebuild (1.5c): `make up` rebuilds the lab from clean; second Ansible run is idempotent · M+C
   - Verify: second run reports `changed=0`
 - [ ] **1.21** Update docs for any deviation; confirm teardown works · M+C
+  - Docs pass 2026-11-09: 17 deviations in ARCHITECTURE (stale teardown and routine text, Tier 2 items drawn as built, the lego timer, the vuln challenge record, OAuth parameters, mon missing from IAM, agents on mon and vuln, a broken SG table, the repo layout and a garbled line from PR 121) and the README (Juice Shop absent, mon drawn as Tier 2, the dropped 443 window, the status table, the routine, the badge and author links pointing at an old account name) fixed in one PR; measured costs added to §12. Still to do: the network-rebuild line in §13 once `make verify` passes, and the final teardown
   - Verify: after `terraform destroy` of `lab` (approved), no billable lab resources remain
 
 **Any time, when Marko says so**
