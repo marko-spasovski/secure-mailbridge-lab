@@ -3,7 +3,8 @@
 # at the first failure.
 #
 #   make plan-up    save the start plan, print it          (review it)
-#   make up         apply that saved plan, wait for boot, configure, prove idempotence
+#   make up         apply that saved plan, then make configure
+#   make configure  wait for fw-ips's first boot, run site.yml, prove idempotence (resumes a failed up)
 #   make verify     read-only checks of a running lab
 #   make plan-down  save the teardown plan, print it       (review it)
 #   make down       evidence, clean stop, apply that saved plan, check nothing is left
@@ -24,7 +25,7 @@ TF_VARS  := -var vuln_enabled=$(VULN)
 DOMAIN    = $(shell awk '/^domain:/ {print $$2}' ansible/group_vars/all/domain.yml)
 REGION   := eu-central-1
 
-.PHONY: help preflight plan-up up verify plan-down down
+.PHONY: help preflight plan-up up configure verify plan-down down
 
 help:
 	@sed -n '/^#   make/p' Makefile
@@ -46,7 +47,13 @@ up: preflight
 	@test -f $(PLAN_DIR)/up.tfplan || { echo "No saved plan: make plan-up first"; exit 1; }
 	$(TF) apply $(PLAN_DIR)/up.tfplan
 	rm -f $(PLAN_DIR)/up.tfplan
-	cd ansible && ansible all -m ansible.builtin.command -a 'cloud-init status --wait'
+	$(MAKE) --no-print-directory configure
+
+# Only fw-ips is reachable at first: the private hosts reach SSM through its
+# NAT, which site.yml's first play sets up; each later play then waits for its
+# host with wait_for_connection (ARCHITECTURE §13).
+configure: preflight
+	cd ansible && ansible fw_ips -m ansible.builtin.command -a 'cloud-init status --wait'
 	cd ansible && ansible-playbook site.yml
 	@echo "Second run: every host must report changed=0"
 	cd ansible && ansible-playbook site.yml | tee $(PLAN_DIR)/second-run.log
