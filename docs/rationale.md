@@ -1671,3 +1671,15 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** No SIEM detection of IDOR in Tier 1; Tier 2's pentest will show whether anything notices it, which is itself a finding.
 
 **Verify (once built).** A table of built-in rules against test events; each local rule fires once on a test event for both mail and vuln.
+
+## 134. Download timeout and retries (2026-11-09)
+
+**Problem.** The session start stopped four times on db at "Download the pinned postgres_exporter release": `Connection failure: The read operation timed out`, `elapsed: 10`. `curl` on db showed the path is healthy (TCP 6 ms, TLS 65 ms, `code=200`, the whole 10,557,302 bytes in 0.04 s once they started), but GitHub's asset host, `release-assets.githubusercontent.com`, waited 10–11 s before the first byte. `get_url`'s `timeout` (default 10 s) caps each wait for data on the socket, so the download failed every time, whatever network the laptop was on: db downloads the file itself, out through fw-ips.
+
+**Options.** A: `timeout: 60` and `retries: 3` (with `until: … is succeeded`, `delay: 10`) on all 14 `get_url` tasks. B: only on postgres_exporter. C: copy the file onto db by hand so `get_url` finds it with the right checksum and skips the download.
+
+**Chosen: A.** Every download is from the same kind of host (GitHub releases, Grafana's and Wazuh's servers), so B leaves the other 13 to fail the next time a host is slow. C changes no code, so the next fresh db fails again, and it deploys something that isn't from merged `main`. 60 s matches Ansible's connection timeout (decision 102).
+
+**Trade-off accepted.** A host that is really down now costs up to four tries of 60 s plus three 10 s pauses (about 4.5 minutes) before the run fails, instead of 10 s. Integrity is unchanged: every download is still checked against its pinned SHA-256, so a slow or different server can't deliver a different file.
+
+**Verify.** The next fresh `site.yml` passes postgres_exporter's download; `ansible-playbook --check` on a configured host reports the download tasks `ok`; `grep -c 'timeout: 60'` across the roles counts 14.

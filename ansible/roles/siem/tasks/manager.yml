@@ -56,22 +56,32 @@
 
 - name: Install Wazuh's index template for Filebeat
   ansible.builtin.get_url:
+    timeout: 60
     url: "{{ siem_wazuh_template_url }}"
     dest: /etc/filebeat/wazuh-template.json
     checksum: sha256:{{ siem_wazuh_template_sha256 }}
     owner: root
     group: root
     mode: "0644"
+  register: siem_download
+  until: siem_download is succeeded
+  retries: 3
+  delay: 10
   notify: Restart Filebeat
 
 - name: Download Wazuh's Filebeat module
   ansible.builtin.get_url:
+    timeout: 60
     url: "{{ siem_filebeat_module_url }}"
     dest: /var/cache/wazuh-filebeat-module.tar.gz
     checksum: sha256:{{ siem_filebeat_module_sha256 }}
     owner: root
     group: root
     mode: "0644"
+  register: siem_download
+  until: siem_download is succeeded
+  retries: 3
+  delay: 10
 
 # unarchive compares the archive with what is on disk (tar --diff), so it
 # changes only when the pinned archive does.

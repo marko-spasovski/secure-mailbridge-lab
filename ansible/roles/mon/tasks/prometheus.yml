@@ -38,12 +38,17 @@
 # skips the download when a file with that hash is already there.
 - name: Download the pinned Prometheus release
   ansible.builtin.get_url:
+    timeout: 60
     url: https://github.com/prometheus/prometheus/releases/download/v{{ mon_prometheus_version }}/prometheus-{{ mon_prometheus_version }}.linux-amd64.tar.gz
     dest: /var/cache/prometheus/prometheus-{{ mon_prometheus_version }}.linux-amd64.tar.gz
     checksum: sha256:{{ mon_prometheus_sha256 }}
     owner: root
     group: root
     mode: "0644"
+  register: mon_download
+  until: mon_download is succeeded
+  retries: 3
+  delay: 10
 
 # A versioned directory, like lego: an update unpacks next to the old one and
 # only the links move. Only the two binaries; the sample config isn't used.

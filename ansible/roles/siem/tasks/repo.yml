@@ -3,12 +3,17 @@
 # SHA-256 differs from the pinned value; apt reads the armored file directly.
 - name: Install Wazuh's signing key
   ansible.builtin.get_url:
+    timeout: 60
     url: https://packages.wazuh.com/key/GPG-KEY-WAZUH
     dest: /etc/apt/keyrings/wazuh.asc
     checksum: sha256:{{ wazuh_gpg_sha256 }}
     owner: root
     group: root
     mode: "0644"
+  register: siem_download
+  until: siem_download is succeeded
+  retries: 3
+  delay: 10
 
 - name: Limit the Wazuh repository to Wazuh's packages
   ansible.builtin.template:

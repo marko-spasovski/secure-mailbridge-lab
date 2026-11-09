@@ -9,12 +9,17 @@
 # reads the armored file directly.
 - name: Install Grafana's signing key
   ansible.builtin.get_url:
+    timeout: 60
     url: https://apt.grafana.com/gpg.key
     dest: /etc/apt/keyrings/grafana.asc
     checksum: sha256:{{ mon_grafana_gpg_sha256 }}
     owner: root
     group: root
     mode: "0644"
+  register: mon_download
+  until: mon_download is succeeded
+  retries: 3
+  delay: 10
 
 - name: Limit the Grafana repository to Grafana at the pinned version
   ansible.builtin.template:
