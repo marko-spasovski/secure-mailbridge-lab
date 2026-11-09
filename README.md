@@ -2,7 +2,7 @@
 
 > A segmented AWS lab that runs **Mailbridge**, a unified Gmail and Outlook inbox, behind **OpenVPN**, with **Suricata** inline IPS, a **ModSecurity** WAF and **Wazuh** SIEM. I attack my own deployment, measure what gets detected, fix it and document the findings.
 
-[![CI](https://github.com/rossiko22/secure-mailbridge-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/rossiko22/secure-mailbridge-lab/actions/workflows/ci.yml)
+[![CI](https://github.com/marko-spasovski/secure-mailbridge-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/marko-spasovski/secure-mailbridge-lab/actions/workflows/ci.yml)
 ![Terraform](https://img.shields.io/badge/Terraform-%E2%89%A5%201.11-7B42BC?logo=terraform&logoColor=white)
 ![Ansible](https://img.shields.io/badge/Ansible-roles-EE0000?logo=ansible&logoColor=white)
 ![AWS](https://img.shields.io/badge/AWS-eu--central--1-FF9900?logo=amazonwebservices&logoColor=white)
@@ -53,7 +53,7 @@ flowchart LR
 
 ### Tier 1: request path
 
-This is the Tier 1 target design (part of it is still being built, see [Project status](#project-status)). [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the source of truth.
+This is the Tier 1 lab as built and verified, including the deliberately vulnerable Juice Shop target that Tier 2 attacks. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) is the source of truth.
 
 ```mermaid
 %%{init: {"flowchart": {"subGraphTitleMargin": {"top": 0, "bottom": 10}}}}%%
@@ -85,6 +85,10 @@ flowchart LR
             end
             subgraph mgmt["Mgmt subnet<br/>10.0.5.0/24"]
                 siem["EC2 siem · 10.0.5.10<br/>Wazuh"]
+                mon["EC2 mon · 10.0.5.20<br/>Prometheus · Grafana<br/>Alertmanager"]
+            end
+            subgraph vulnsn["Vuln subnet<br/>10.0.6.0/24"]
+                vuln["🎯 EC2 vuln · 10.0.6.10<br/>OWASP Juice Shop<br/>hardened container"]
             end
         end
         subgraph svc["AWS managed services"]
@@ -92,7 +96,7 @@ flowchart LR
             ssm["SSM Parameter Store<br/>secrets"]
             ecr["ECR<br/>Mailbridge image"]
             r53["Route 53<br/>vpn record · DNS-01"]
-            s3[("S3<br/>state · flow logs · audit")]
+            s3[("S3<br/>state · flow logs · CloudTrail")]
         end
     end
 
@@ -120,13 +124,19 @@ flowchart LR
     proxy -.->|"DNS-01"| r53
     vpc -.->|"flow logs"| s3
 
+    %% Juice Shop and monitoring (edges 18-20)
+    proxy ==>|"TCP 3000<br/>through fw-ips + Suricata"| vuln
+    vuln -.->|"agent"| siem
+    mon -.->|"scrape 9100 · probe 443"| proxy
+
     classDef ec2 fill:#ffffff,stroke:#ED7100,stroke-width:2px,color:#232F3E
     classDef sec fill:#ffffff,stroke:#DD344C,stroke-width:2px,color:#232F3E
     classDef data fill:#ffffff,stroke:#C925D1,stroke-width:2px,color:#232F3E
     classDef mgmtn fill:#ffffff,stroke:#E7157B,stroke-width:2px,color:#232F3E
     classDef aws fill:#ffffff,stroke:#7AA116,stroke-width:1.5px,color:#232F3E
     classDef ext fill:#F3F4F6,stroke:#6B7280,stroke-width:1.5px,color:#232F3E
-    class proxy,app ec2
+    class proxy,app,mon ec2
+    class vuln sec
     class ovpn,nft,sur,dns sec
     class db data
     class siem mgmtn
@@ -141,10 +151,12 @@ flowchart LR
     style appsn fill:#E6F6F7,stroke:#00A4A6,color:#006A6B
     style datasn fill:#E6F6F7,stroke:#00A4A6,color:#006A6B
     style mgmt fill:#FCE8F3,stroke:#E7157B,color:#9E0D52
+    style vulnsn fill:#FDECEC,stroke:#DD344C,stroke-dasharray:4 3,color:#9E1B2E
     style svc fill:#FFFFFF,stroke:#7AA116,stroke-dasharray:4 3,color:#3F5B0B
 
     linkStyle 0,1,2,3,4,5,6 stroke:#ED7100,stroke-width:3px
-    linkStyle 10,11,12,13 stroke:#E7157B
+    linkStyle 10,11,12,13,19 stroke:#E7157B
+    linkStyle 18 stroke:#DD344C,stroke-width:3px
 ```
 
 **How to read it**
@@ -157,6 +169,7 @@ flowchart LR
 | dotted grey arrows | calls to AWS services (logical: they leave through fw-ips NAT, because there are no interface endpoints) |
 | 🟩 green box | public subnet, the only one routed to the Internet Gateway |
 | 🟦 teal boxes | private subnets, default route `0.0.0.0/0 → fw-ips` |
+| 🟥 red dashed box | the vuln subnet: Juice Shop, reached only from proxy, every path through fw-ips and Suricata, no egress from the container |
 
 **Request path, step by step**
 
@@ -167,21 +180,24 @@ flowchart LR
 5. The proxy forwards to Mailbridge on TCP 3000.
 6. Mailbridge reads and writes PostgreSQL on TCP 5432. Mailbox OAuth tokens are encrypted before they are stored.
 
+Juice Shop (`vuln.<domain>`) uses the same front door: the same VPN, Nginx and ModSecurity configuration as Mailbridge, with its own certificate. Only proxy's request to it differs: it crosses fw-ips, so Suricata inspects it, and nothing in the vuln subnet can reach the rest of the VPC.
+
 **Design principles**
 
-- **One way in.** Clients reach the app only through OpenVPN. TCP 443 on fw-ips opens only during planned outside-attack test windows.
+- **One way in.** Clients reach both apps only through OpenVPN; no web port is ever open to the internet (decision 129).
 - **One hop at a time.** Proxy → app → db, enforced by security groups, NACLs and nftables. No subnet can skip a layer.
 - **Inspected and attributable.** Suricata sees the decrypted VPN traffic. VPN pools are routed, not NATed, so every log shows the real client address and therefore the device certificate.
-- **Private by default.** `mail.<domain>` never appears in public DNS, port 22 is never open, and every private subnet leaves through fw-ips.
+- **A vulnerable app, contained.** Juice Shop is a real target with real defences, isolated in its own subnet: its container can't open any outbound connection, and every attempt is logged and alerted.
+- **Private by default.** `mail.<domain>` and `vuln.<domain>` never appear in public DNS, port 22 is never open, and every private subnet leaves through fw-ips.
 
 ### End state: Tiers 1 to 3
 
 <details>
-<summary>Show the full planned lab (monitoring, CI, backups, k3s, scanning)</summary>
+<summary>Show the full planned lab (CI, backups, GuardDuty, k3s, scanning)</summary>
 
 <br/>
 
-This is the planned finished lab. It is not what runs today: see [`docs/TASKS.md`](docs/TASKS.md).
+This is the planned finished lab. The blue parts run today (Tier 1); the rest is gated, see [`docs/TASKS.md`](docs/TASKS.md).
 
 ```mermaid
 flowchart TB
@@ -189,7 +205,7 @@ flowchart TB
         direction LR
         user["VPN user<br/>one certificate per device<br/>pool 10.8.0.0/24"]
         admin["VPN admin<br/>fixed address<br/>pool 10.8.1.0/24"]
-        tester["Attack tests<br/>own deployment only"]
+        tester["Attacker certificate (Tier 2)<br/>user pool, own deployment only"]
         gha["GitHub Actions<br/>tests, scans, image build"]
         apis["Gmail and<br/>Microsoft Graph APIs"]
         notify["Email / Discord"]
@@ -215,6 +231,9 @@ flowchart TB
             siem["siem 10.0.5.10<br/>Wazuh"]
             mon["mon 10.0.5.20<br/>Prometheus, Grafana,<br/>Alertmanager"]
         end
+        subgraph vulnnet["VULN 10.0.6.0/24, through fw-ips only"]
+            vuln["vuln 10.0.6.10<br/>OWASP Juice Shop"]
+        end
     end
 
     subgraph aws["AWS managed services"]
@@ -223,14 +242,15 @@ flowchart TB
         ecr["ECR<br/>Mailbridge image"]
         r53["Route 53<br/>public DNS, DNS-01"]
         s3[("S3<br/>backups, flow logs, audit logs")]
-        audit["CloudTrail, GuardDuty,<br/>VPC flow logs"]
+        audit["CloudTrail, VPC flow logs"]
+        guardduty["GuardDuty<br/>trial with the Tier 2 attacks"]
     end
 
     scanner["Vulnerability scanning<br/>Nuclei / Greenbone<br/>placement to be decided"]
 
     user ==>|"UDP 1194"| ovpn
     admin ==>|"UDP 1194"| ovpn
-    tester -.->|"TCP 443, test windows only"| nft
+    tester -.->|"UDP 1194, user pool"| ovpn
     ovpn ==>|"decrypted traffic"| nft
     ovpn -->|"DNS"| unbound
     nft <-->|"NFQUEUE, can drop"| suricata
@@ -238,6 +258,7 @@ flowchart TB
     nft -->|"admin pool: 443, 3000"| mgmt
     proxy ==>|"TCP 3000"| app
     app ==>|"TCP 5432"| db
+    proxy -->|"TCP 3000, through fw-ips"| vuln
 
     dmz -->|"egress: TCP 443, NTP, DNS"| nft
     apptier -->|"egress"| nft
@@ -248,6 +269,7 @@ flowchart TB
     gha -->|"push image"| ecr
     db -.->|"nightly pg_dump, gateway endpoint"| s3
     audit -.-> s3
+    guardduty -.-> audit
 
     public -.->|"Wazuh agents 1514, 1515"| siem
     dmz -.->|"agents"| siem
@@ -262,8 +284,8 @@ flowchart TB
     classDef tier2 fill:#dcfce7,stroke:#15803d,color:#111827
     classDef tier3 fill:#fef3c7,stroke:#b45309,color:#111827
     classDef ext fill:#f3f4f6,stroke:#6b7280,color:#111827
-    class ovpn,nft,suricata,unbound,proxy,app,db,siem,ssm,ecr,r53,audit,s3 tier1
-    class mon,gha tier2
+    class ovpn,nft,suricata,unbound,proxy,app,db,siem,mon,vuln,ssm,ecr,r53,audit,s3 tier1
+    class gha,guardduty tier2
     class scanner tier3
     class user,admin,tester,apis,notify ext
 ```
@@ -279,18 +301,20 @@ flowchart TB
 
 | Layer | Tool | Role in the lab |
 |---|---|---|
-| Infrastructure | **Terraform** (AWS provider 6.x) | VPC, subnets, routes, security groups, NACLs, EC2, SSM parameters |
+| Infrastructure | **Terraform** (AWS provider 6.x) | VPC, subnets, routes, security groups, NACLs, EC2, IAM, generated SSM secrets, buckets, DNS zone, CloudTrail, budgets |
 | Configuration | **Ansible** (one role per host, dynamic `aws_ec2` inventory) | idempotent host setup over SSH tunnelled through SSM |
 | Remote access | **OpenVPN** + easy-rsa | the only entry point; offline CA, one certificate per device, CRL revocation |
 | Firewall | **nftables** | per-pool forwarding policy, NAT for private subnets, logged drops |
 | IPS | **Suricata** (NFQUEUE on `tun0`) | inline inspection of decrypted VPN traffic, ET Open + custom rules |
-| DNS | **Unbound** | private `mail.<domain>` record for VPN clients |
+| DNS | **Unbound** | private `mail.<domain>` and `vuln.<domain>` records for VPN clients |
 | Reverse proxy / WAF | **Nginx** + **ModSecurity v3** (OWASP CRS) + **lego** (ACME client) | TLS (Let's Encrypt via DNS-01), rate limiting, web attack filtering |
 | Application | **Mailbridge** in **Docker** | unified Gmail / Outlook inbox, image pulled from ECR by digest |
+| Vulnerable target | **OWASP Juice Shop** in **Docker** | the Tier 2 pentest target: read-only, no capabilities, no egress, behind the same defences as Mailbridge |
 | Database | **PostgreSQL** | app data; reachable only from the app host |
 | SIEM | **Wazuh** | collects Suricata, nftables, Nginx, ModSecurity, auth and OpenVPN logs |
 | Secrets | **SSM Parameter Store** | SecureString parameters; one IAM role per instance, least privilege |
-| Monitoring *(Tier 2)* | **Prometheus**, **Grafana**, **Alertmanager** | host and service health, alerting |
+| Monitoring | **Prometheus**, **Grafana**, **Alertmanager** + exporters | host and service health, probes, CPU credits, alerts to Discord |
+| Audit | **CloudTrail** | every AWS API call, multi-region, with signed digests |
 
 ---
 
@@ -300,15 +324,17 @@ flowchart TB
 
 | Component | Status |
 |---|---|
-| Network: VPC, 5 subnets, routes, security groups, NACLs, flow logs | ✅ in code, imported from the hand build (clean rebuild planned in task 1.20) |
-| fw-ips: OpenVPN, nftables, Suricata, Unbound | ✅ in code, rebuilt from scratch and verified |
-| Dynamic Ansible inventory | ✅ verified |
-| `persistent` stack | 🟡 started (DB password in SSM); state bucket, Route 53 zone and others still to import |
-| db: PostgreSQL | ⏭️ next |
-| app, proxy, siem | ⬜ planned |
-| `make up` / `make down` | ⬜ planned (task 1.20) |
-| Attack scenarios and findings report | ⬜ after Tier 1 |
-| Tier 2 (monitoring, app CI, backups) and Tier 3 (k3s, scanning, ISO 27001 map) | 🔒 gated: each starts only after the previous tier's write-up |
+| Network: VPC, 6 subnets, routes, security groups, NACLs, flow logs | ✅ in code, rebuilt from nothing on 2026-11-09 (task 1.20) |
+| fw-ips: OpenVPN, nftables, Suricata (custom rules), Unbound | ✅ in code, verified |
+| db, app, proxy (Nginx, ModSecurity, lego) | ✅ in code, verified |
+| siem (Wazuh) and Wazuh agents on every host, local detection rules | ✅ in code, verified live |
+| mon (Prometheus, Grafana, Alertmanager), exporters, alerts | ✅ in code, verified |
+| vuln: OWASP Juice Shop, isolated, behind the same defences | ✅ in code, verified (task 2.8 to 2.13) |
+| `persistent` stack: secrets, volumes, buckets, zone, ECR, CloudTrail, budgets | ✅ in code; hand-made keys and certificates stay out of state by design |
+| `make plan-up` / `up` / `verify` / `plan-down` / `down` | ✅ in use |
+| End-to-end OAuth check, Tier 1 write-up | 🟡 in progress (tasks 1.19, 1.21) |
+| Threat model, then the attacks and the findings report | ⬜ Tier 2 |
+| App CI, backups, GuardDuty (Tier 2) and k3s, scanning, ISO 27001 map (Tier 3) | 🔒 gated: each starts only after the previous tier's write-up |
 
 ---
 
@@ -318,17 +344,21 @@ flowchart TB
 secure-mailbridge-lab/
 ├── terraform/
 │   ├── modules/          # shared modules: network/, security/, compute/
-│   ├── persistent/       # created once, never destroyed: secrets, state and log buckets, DNS zone, Budget
+│   ├── persistent/       # created once, never destroyed: secrets, data volumes, buckets, DNS zone, ECR, CloudTrail, budgets
 │   └── lab/              # the lab itself: network (kept between sessions) + EC2 hosts (removed after each session)
 ├── ansible/
 │   ├── site.yml          # one play per host group
+│   ├── evidence.yml      # raw logs to the laptop before teardown
+│   ├── stop.yml          # flush and stop Wazuh and Prometheus before teardown
 │   ├── inventories/aws/  # aws_ec2 dynamic inventory (by Project and Role tags)
-│   └── roles/            # fw_ips/ proxy/ app/ db/ siem/ mon/
+│   └── roles/            # common/ fw_ips/ proxy/ app/ db/ siem/ mon/ vuln/ wazuh_agent/ node_exporter/ postgres_exporter/
 ├── suricata-rules/
 │   ├── rules/            # custom Suricata rules (local.rules)
 │   └── pcaps/            # test captures + generate.py
 ├── docs/                 # architecture, decisions, findings (see Documentation)
 ├── .github/workflows/    # CI quality gates
+├── siem-certs/           # wazuh-certs-tool input and procedure (certificates stay on the laptop and in SSM)
+├── Makefile              # the session routine
 ├── .pre-commit-config.yaml
 └── START.md              # start-of-session checklist
 ```
@@ -348,39 +378,30 @@ secure-mailbridge-lab/
 - **Ansible** installed with pipx, plus `boto3` and `botocore[crt]` injected into its venv, and the `amazon.aws` collection
 - An **offline easy-rsa CA** on your laptop, with the fw-ips files published to SSM under `/vpn/fw-ips/*` (see ARCHITECTURE §5)
 - A subdomain delegated to the Route 53 zone, and an OpenVPN client profile
-- Untracked local files, created from the examples: `terraform/lab/backend.hcl`, `terraform/lab/terraform.tfvars`
+- Untracked local files, created from the examples: `terraform/{lab,persistent}/backend.hcl`, `terraform/{lab,persistent}/terraform.tfvars`, `ansible/group_vars/all/domain.yml`
 
-### Session routine (until `make up` exists)
+### Session routine
 
 ```bash
-# 1. Log in and load the Ansible key
+# Log in and load the Ansible key (the preflight step checks both)
 aws login
-aws sts get-caller-identity --query Arn --output text
-ssh-add ~/.ssh/mailbridge-lab-ansible
+eval "$(ssh-agent -s)" && ssh-add ~/.ssh/mailbridge-lab-ansible
 
-# 2. Bring the hosts up (review the plan before applying)
-terraform -chdir=terraform/lab plan -out=on.tfplan
-terraform -chdir=terraform/lab apply on.tfplan
+# Start: review the saved plan, then apply exactly that plan and configure
+make plan-up
+make up            # apply, fw-ips first, site.yml twice; fails unless the second run is changed=0
+                   # (make configure resumes the Ansible part without a new apply)
 
-# 3. Configure the hosts; the second run should report changed=0
-cd ansible
-ansible-inventory --graph
-ansible fw_ips -m command -a 'cloud-init status --wait'
-ansible-playbook site.yml
-
-# 4. Connect and check
+# Connect and check
 sudo openvpn --config <device>.ovpn
-ping -c 3 10.0.1.10
-dig +short @10.0.1.10 mail.<domain>   # expect 10.0.2.10
+make verify        # empty plan, hosts, Wazuh, Prometheus targets, VPN, DNS, HTTPS
+
+# End: evidence to the laptop, clean stop, teardown, nothing left
+make plan-down
+make down
 ```
 
-### Teardown
-
-```bash
-# Removes the EC2 hosts, the Elastic IP and the vpn record; the free network layer stays
-terraform -chdir=terraform/lab plan -var hosts_enabled=false -out=off.tfplan
-terraform -chdir=terraform/lab apply off.tfplan
-```
+Terraform changes only through a plan file you reviewed: `up` and `down` refuse to run without one and delete it after use (decision 142). `VULN=false` starts the lab without Juice Shop.
 
 The full routine, with the expected output of every check, is in [`docs/TASKS.md`](docs/TASKS.md) ("Before db").
 
@@ -428,7 +449,7 @@ Branches follow Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`), one c
 | [`decisions.md`](docs/decisions.md) | one line per design decision (date · decision · why) |
 | [`rationale.md`](docs/rationale.md) | the reasoning behind each decision: options, choice, trade-off, verification |
 | [`lessons.md`](docs/lessons.md) | per-session write-ups of what was built and learned |
-| [`threat-model.md`](docs/threat-model.md) | threat model *(draft pending)* |
+| [`threat-model.md`](docs/threat-model.md) | threat model *(Tier 2, task 2.17: written from the finished Tier 1 lab before any attack)* |
 | [`findings-report.md`](docs/findings-report.md) | attack scenarios: attack → detection → fix → re-test |
 | [`iso27001-map.md`](docs/iso27001-map.md) | ISO 27001 / NIS2 controls map *(Tier 3)* |
 
@@ -444,7 +465,7 @@ All attack tooling in this repository targets **only infrastructure I own and de
 
 **Marko Spasovski**: built as a hands-on security engineering project covering network segmentation, inline IPS, SIEM, and attack and detection testing.
 
-[GitHub](https://github.com/rossiko22) · [LinkedIn](https://www.linkedin.com/in/marko-spasovski2/)
+[GitHub](https://github.com/marko-spasovski) · [LinkedIn](https://www.linkedin.com/in/marko-spasovski2/)
 
 ---
 

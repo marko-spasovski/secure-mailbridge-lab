@@ -4,7 +4,7 @@ Private-access deployment of Mailbridge (unified Gmail/Outlook inbox) inside a s
 Only entry point: OpenVPN. Purpose: run the app securely, attack it, detect attacks, document findings.
 
 Region: `eu-central-1` (Frankfurt) · Single AZ (lab; multi-AZ deliberately skipped for cost)
-Deploy: Terraform (infra) + Ansible (config) · Teardown: `terraform destroy` when not in use
+Deploy: Terraform (infra) + Ansible (config), run through `make plan-up` → `make up` · Teardown: `make plan-down` → `make down` after every session (decision 142)
 
 ---
 
@@ -35,7 +35,7 @@ Deploy: Terraform (infra) + Ansible (config) · Teardown: `terraform destroy` wh
                    └────────┬───────────────┘
                    ┌────────▼───────────────┐
                    │ DATA 10.0.4.0/24       │
-                   │ db    10.0.4.10        │ PostgreSQL · nightly pg_dump → S3 (gateway endpoint)
+                   │ db    10.0.4.10        │ PostgreSQL · (Tier 2: nightly pg_dump → S3 via gateway endpoint, T2.3)
                    └────────────────────────┘
                    ┌────────────────────────┐
                    │ MGMT 10.0.5.0/24       │ reachable only from admin VPN pool 10.8.1.0/24
@@ -47,7 +47,7 @@ Deploy: Terraform (infra) + Ansible (config) · Teardown: `terraform destroy` wh
                    │ vuln 10.0.6.10         │ OWASP Juice Shop (Docker), deliberately vulnerable target
                    └────────────────────────┘
 
-  Outside AWS: GitHub Actions → Jest/Playwright, k6, Trivy, SonarCloud, ZAP baseline
+  Outside AWS (Tier 2, T2.2): GitHub Actions → Jest/Playwright, k6, Trivy, SonarCloud, ZAP baseline
 ```
 
 ---
@@ -109,7 +109,6 @@ All instances: IMDSv2 required · SSM agent (admin access; Ansible uses SSH tunn
 | sg-mon | TCP 3000 (Grafana) | 10.8.1.0/24 |
 | sg-vuln | TCP 3000 | 10.0.2.10/32 (proxy, by IP: decision 68) |
 | | TCP 9100 | 10.0.5.20/32 (mon, by IP: the path crosses fw-ips) |
-
 | all | TCP 9100 (node_exporter), 9187 (postgres_exporter on db) | sg-mon |
 
 mon's scrape and probe rules are built with the exporters in 1.23: 9100 in 3a (the rows above, sg-mon egress to each scraped group and to 10.0.1.10, and an nftables input rule on fw-ips; decision 120), 9187 in 3b (sg-db from sg-mon, data NACL 108/109; postgres_exporter logs in by peer authentication, decision 124) and 443 to proxy in 3c (sg-proxy and dmz NACL 105 from 10.0.5.20/32; the probe targets proxy by address with SNI and Host, decision 125); Grafana's row, sg-mon's egress and the mgmt NACL's 112/115 are built in 1.22 (decision 111).
@@ -181,13 +180,13 @@ The vuln subnet has no rule to data, app or mgmt, so db, Mailbridge and Wazuh's 
 ## 6. DNS & TLS
 
 - Unbound on fw-ips (10.0.1.10): private record `mail.<domain> → 10.0.2.10`, forwards everything else to AmazonProvidedDNS (10.0.0.2). The name resolves only inside the VPN. Unbound serves VPN clients; private hosts keep AmazonProvidedDNS, which security groups and NACLs don't filter (known gap, tested in scenario 2.2). VPN DNS ends at fw-ips, so Suricata doesn't see it. Unbound doesn't validate DNSSEC, because AmazonProvidedDNS returns no signatures.
-- lego (one pinned static binary, verified by SHA-256, decision 59) obtains a Let's Encrypt cert via **DNS-01 challenge** using the proxy instance role — no public exposure and no stored API token. Nginx serves it; the role installs a systemd timer that runs `lego renew` and reloads Nginx after a renewal.
+- lego (one pinned static binary, verified by SHA-256, decision 59) obtains a Let's Encrypt cert via **DNS-01 challenge** using the proxy instance role — no public exposure and no stored API token. Nginx serves it; each certificate has its own instance of the template units `lego-renew@.service` and `@.timer` (`/etc/lego/<name>.env`, one lock shared by both), which renews it and reloads Nginx after a renewal (decision 136).
 - Nginx on proxy accepts TLS 1.3 only, sends HSTS (short `max-age` while on staging; Nginx is the only layer that sets it, and the app's own header is hidden, decision 62) and hides its version; no OCSP stapling, because Let's Encrypt no longer runs OCSP (decision 61).
 - ModSecurity on proxy blocks from the first deploy at CRS paranoia level 1 with the default anomaly thresholds (decisions 64, 65). CRS 4.25.0 is the newest release Ubuntu 24.04's engine (3.0.12) can load; only JSON request bodies are accepted (decision 63). Local rules run before the CRS in `exclusions-before.conf`: the profile photo field is checked against the exact data-URL shape the app accepts, and only then skipped by the attack rules. The audit log keeps parts `ABFHZ` (no bodies) for flagged transactions and 5xx, root only (decision 66).
 - Nginx on proxy rate-limits per client address before the app: 20 requests/s with burst 50 everywhere, and 6 per minute with burst 5 for POSTs to the sign-in, registration, password reset and password change paths. Over the limit gets `429`, logged at `error` for Wazuh. The app keeps its own 15-minute and per-account counters (decisions 77, 78). `vuln.<domain>` gets the same numbers in its own zones, with Juice Shop's sign-in, registration (`POST /api/Users`), password reset and second-factor paths on the auth limit (decision 136).
 - **Staging certificates while building and rebuilding; switch to production certs once the setup is stable** (avoids Let's Encrypt rate limits).
 - DNS provider: **Route 53** public hosted zone in the `persistent` stack. `<domain>` is a subdomain of a domain Marko already owns, delegated by adding NS records for that subdomain at the parent's DNS provider. The parent domain stays where it is, and the real name stays out of this public repo.
-- Public records: `_acme-challenge.mail.<domain>` (TXT, lego) and `vpn.<domain>` (A, TTL 60, written by `lab`). `mail.<domain>` is never public.
+- Public records: `_acme-challenge.mail.<domain>` and `_acme-challenge.vuln.<domain>` (TXT, lego, only during a challenge) and `vpn.<domain>` (A, TTL 60, written by `lab`). `mail.<domain>` is never public.
 - Juice Shop (decisions 70, 129): Unbound adds `vuln.<domain> → 10.0.2.10`. proxy serves it with its **own** certificate (not a SAN on mail's), from a templated `lego-renew@<name>` service per name, with the decision 60 condition extended to `_acme-challenge.vuln.<domain>`. Like mail, it is reachable only over the VPN; there is no public listener or record.
 - OAuth redirects `https://mail.<domain>/accounts/callback/gmail` and `https://mail.<domain>/accounts/callback/outlook` (the app's own routes) work because the redirect happens in the browser, which is inside the tunnel.
 - Google/Microsoft OAuth apps stay in **testing mode, test accounts only**. The lab has its own clients, separate from any other deployment of Mailbridge: a Google project of its own (External, Testing, listed test users) with one Web client whose only redirect URI is the gmail callback, and an Entra registration for personal Microsoft accounts only (`MICROSOFT_TENANT=consumers`) with the outlook callback, delegated `User.Read`, `Mail.ReadWrite`, `Mail.Send`, `offline_access`, and a 180-day secret (decision 145)
@@ -197,12 +196,12 @@ The vuln subnet has no rule to data, app or mgmt, so db, Mailbridge and Wazuh's 
 ## 7. Secrets & IAM
 
 - SSM Parameter Store (`/siem/*`): the Wazuh indexer and API users' passwords, generated by `persistent` into write-only SecureString values (decision 89), and under `/siem/certs/*` the Wazuh CA certificate and the admin, indexer, server and dashboard certificates (String) and keys (SecureString), made once on the laptop with `wazuh-certs-tool` from `siem-certs/config.yml` and stored by hand. The Wazuh CA key is never under `/siem/`: it stays on the laptop in `~/mailbridge-pki/wazuh/`, encrypted with a passphrase kept off AWS, and its backup is `/wazuh-ca/key`, which no instance role can read (decision 90)
-- SSM Parameter Store (SecureString, `/mailbridge/*`): DB owner and runtime passwords (decision 54), session secret, token encryption key (decision 55), OAuth client secrets (1.19)
+- SSM Parameter Store (SecureString, `/mailbridge/*`): DB owner and runtime passwords (decision 54), session secret, token encryption key (decision 55); the lab's OAuth client IDs and secrets, made by hand (decision 145)
 - ECR repository `juice-shop` in `persistent`, separate from `mailbridge`: immutable tags, scan on push, KMS, lifecycle; filled by hand from Docker Hub by digest on the laptop (decision 69)
 - The DB password is generated by the `persistent` stack with an ephemeral `random_password` written to a write-only `value_wo`, so it never appears in Terraform state, plans, the repo or the laptop (decision 46)
 - Mailbox OAuth tokens encrypted in the DB by the app (key from Parameter Store)
 - The database has two roles: the owner `mailbridge` runs migrations only, and `mailbridge_app` (row access only) runs the app, so the app's credentials can't change the schema or the insert-only audit log (decision 54)
-- One IAM role per instance: all → `mailbridge-lab-ssm-min` (`AmazonSSMManagedInstanceCore` without `ssm:GetParameter` and `ssm:GetParameters`, so no host reads a parameter unless granted); fw-ips → read `/vpn/fw-ips/*` only; app → read `/mailbridge/*` + pull from the Mailbridge ECR repository only; proxy → `route53:ChangeResourceRecordSets` on this zone only for TXT `UPSERT`/`DELETE` of `_acme-challenge.mail.<domain>` (condition keys), `route53:ListResourceRecordSets` on this zone, `route53:GetChange`, and no `ListHostedZones` (decision 60); db → read `/mailbridge/db-password` and `/mailbridge/db-app-password` only, pulled on the host (decisions 47, 54); siem → read `/siem/*` only (decision 89); fw-ips, db, app and proxy → also read `/siem/agent-enrollment-password` only, to enroll their Wazuh agents (decision 100); vuln → `ecr:GetAuthorizationToken` plus image pull on the `juice-shop` ECR repository only, and `/siem/agent-enrollment-password` for its Wazuh agent; no other SSM parameter, because Juice Shop has no secrets (decisions 69, 100); proxy's ACME condition also covers `_acme-challenge.vuln.<domain>` (decision 70); `s3:PutObject` on the backup prefix is added in T2.3
+- One IAM role per instance: all → `mailbridge-lab-ssm-min` (`AmazonSSMManagedInstanceCore` without `ssm:GetParameter` and `ssm:GetParameters`, so no host reads a parameter unless granted); fw-ips → read `/vpn/fw-ips/*` only; app → read `/mailbridge/*` + pull from the Mailbridge ECR repository only; proxy → `route53:ChangeResourceRecordSets` on this zone only for TXT `UPSERT`/`DELETE` of `_acme-challenge.mail.<domain>` (condition keys), `route53:ListResourceRecordSets` on this zone, `route53:GetChange`, and no `ListHostedZones` (decision 60); db → read `/mailbridge/db-password` and `/mailbridge/db-app-password` only, pulled on the host (decisions 47, 54); siem → read `/siem/*` only (decision 89); mon → read `/mon/*` only (decision 112) and `mon-read-cloudwatch`, three CloudWatch read actions for YACE (decision 121); fw-ips, db, app, proxy, mon and vuln → also read `/siem/agent-enrollment-password` only, to enroll their Wazuh agents (decision 100); vuln → `ecr:GetAuthorizationToken` plus image pull on the `juice-shop` ECR repository only, and `/siem/agent-enrollment-password` for its Wazuh agent; no other SSM parameter, because Juice Shop has no secrets (decisions 69, 100); proxy's ACME condition also covers `_acme-challenge.vuln.<domain>` (decision 70); `s3:PutObject` on the backup prefix is added in T2.3
 - No stored AWS keys on any instance: roles provide temporary credentials through IMDSv2
 - SSM parameters made by hand stay out of Terraform, because importing a parameter copies its value into state (decision 143). Each is made by a documented procedure on the laptop: `/vpn/ca/cert` and `/vpn/ca/key` (the offline easy-rsa CA, the key encrypted, task 1.7a); `/vpn/fw-ips/*` (server certificate and key, CA certificate, CRL, tls-crypt key, task 1.7b); `/siem/certs/*` (`wazuh-certs-tool`, `siem-certs/README.md`, decision 90); `/wazuh-ca/key` (the Wazuh CA key, encrypted, out of siem's reach, decision 90); `/mon/certs/grafana-cert` and `grafana-key` (signed with the Wazuh root CA, decision 117); `/mon/discord-webhook-url` (stored by Marko, decision 110); `/mailbridge/google-client-id`, `google-client-secret`, `microsoft-client-id` and `microsoft-client-secret` (the lab's own OAuth clients, stored by Marko through a hidden prompt, decision 145). Generated secrets are made by `persistent` as write-only values and never reach state (decision 46)
 - CloudTrail in `persistent`, always on: one multi-region trail of management events with log file validation, into its own bucket (SSE-S3, versioned, writes only from this trail, TLS only, 90-day expiry) · GuardDuty's 30-day free trial starts with 2.14, so it covers the Tier 2 attacks (decision 140)
@@ -214,7 +213,7 @@ The vuln subnet has no rule to data, app or mgmt, so db, Mailbridge and Wazuh's 
 ## 8. Detection & monitoring
 
 **Security (Wazuh — "is something malicious happening?")**
-- Wazuh 4.14.9, pinned, from Wazuh's apt repository with its signing key checked, configured entirely by the `siem` role (decisions 85, 86). The indexer's Java heap is 3 GB on the t3.large (decisions 87, 99). Its data lives on an encrypted volume in `persistent` that is attached to each session's `siem` host, so alerts survive teardown; certificates and passwords come from SSM, so the dashboard's certificate stays the same every session (decisions 88, 89). Wazuh's repository may supply only its four packages, each only at the pinned version (an apt pin by version) and held (decisions 91, 104); the volume is formatted only when it has no filesystem and the indexer can't start without it (decision 92); the indexer listens on 10.0.5.10 only (decision 93); its only internal users are `admin` and `kibanaserver` (decision 94). The manager's API listens on 127.0.0.1 only, agent enrollment (authd, 1515) requires the password in `/siem/agent-enrollment-password`, and vulnerability detection is off in Tier 1 (decisions 96, 97); Filebeat, the connector and the API users get their credentials from SSM through `set-manager-credentials` (decision 95). The dashboard listens on 10.0.5.10:443 with TLS 1.3 only and verifies the indexer's address (decision 98). The Wazuh agent (`wazuh_agent` role) runs on fw-ips, db, app and proxy at the same pinned version, each pulling the enrollment password with its own instance role and enrolling under its host name (decisions 100, 101)
+- Wazuh 4.14.9, pinned, from Wazuh's apt repository with its signing key checked, configured entirely by the `siem` role (decisions 85, 86). The indexer's Java heap is 3 GB on the t3.large (decisions 87, 99). Its data lives on an encrypted volume in `persistent` that is attached to each session's `siem` host, so alerts survive teardown; certificates and passwords come from SSM, so the dashboard's certificate stays the same every session (decisions 88, 89). Wazuh's repository may supply only its four packages, each only at the pinned version (an apt pin by version) and held (decisions 91, 104); the volume is formatted only when it has no filesystem and the indexer can't start without it (decision 92); the indexer listens on 10.0.5.10 only (decision 93); its only internal users are `admin` and `kibanaserver` (decision 94). The manager's API listens on 127.0.0.1 only, agent enrollment (authd, 1515) requires the password in `/siem/agent-enrollment-password`, and vulnerability detection is off in Tier 1 (decisions 96, 97); Filebeat, the connector and the API users get their credentials from SSM through `set-manager-credentials` (decision 95). The dashboard listens on 10.0.5.10:443 with TLS 1.3 only and verifies the indexer's address (decision 98). The Wazuh agent (`wazuh_agent` role) runs on fw-ips, db, app, proxy, mon and vuln at the same pinned version, each pulling the enrollment password with its own instance role and enrolling under its host name (decisions 100, 101)
 - Suricata `eve.json`, nftables drops, Nginx access/error logs + ModSecurity audit log, auth logs, OpenVPN connect/disconnect, file integrity monitoring. Each agent reads its sources from a per-group list in `group_vars` (fw-ips: `eve.json`; proxy: one Nginx access log per site, `mail.access.log` and `vuln.access.log` (decision 137), the shared error log and the audit log; the kernel, OpenVPN and auth through journald) (decision 105). Where Wazuh decodes an event but stores no alert, the lab's own rules in `mailbridge_rules.xml` (IDs 100100–100299, children of the decoding parent) add one: nftables drops and egress, a burst of drops from one address, OpenVPN session ends, and ModSecurity 403 blocks from the audit log (decision 106); for proxy's two sites and the vuln host, a POST answered 401 (100210) and 10 of them from one address in 5 minutes (100211, T1110), Nginx's sign-in and general rate limits (100212, 100213), and every `VULN-EGRESS-DROP` from the Juice Shop container (100120, level 10) (decision 138)
 - Juice Shop (decision 129, replaces decision 71): a regular application behind proxy with the same Nginx and ModSecurity configuration as Mailbridge (CRS 4.25.0, blocking, PL1, the audit parts of decision 66); false positives in normal use are tuned the way a production app would be, and recorded as findings. The one found in 2.12, socket.io long-polling sending `text/plain`, is lifted by local rule 10020 for that route on `vuln.<domain>` only (decision 139). The shared audit log, vuln's own access log and the shared error log go to Wazuh, plus `DOCKER-USER` drops from the vuln host and Suricata's alerts on the queued proxy→Juice Shop path
 
@@ -228,7 +227,9 @@ The vuln subnet has no rule to data, app or mgmt, so db, Mailbridge and Wazuh's 
 
 ---
 
-## 9. Backups
+## 9. Backups (Tier 2, T2.3)
+
+Not built in Tier 1; the db host is rebuilt empty each session (decision 49).
 
 - Nightly `pg_dump` → S3 bucket (SSE, versioning, 30-day lifecycle) via gateway endpoint
 - **Restore tested and documented** (a backup that was never restored doesn't count)
@@ -258,12 +259,13 @@ For each: attack → detection (or miss) → custom rule/fix → re-test.
 ## 12. Cost control
 
 - AWS Budget alert at **$20** on day one; both budgets (the lab's $20 one and the console's $10 one with a forecast alert) are in `persistent`, with their recipients only in the gitignored tfvars (decision 144)
-- `terraform destroy` when not in use (stopped VMs still pay for disks + public IP). Between sessions, `terraform apply -var hosts_enabled=false` removes every session host (fw-ips with its Elastic IP and the `vpn` record, and the private hosts) (decision 51); the network stays up (decision 16). Each session starts with `terraform apply` and `ansible-playbook site.yml` (decision 41)
+- `terraform destroy` when not in use (stopped VMs still pay for disks + public IP). Between sessions, `make plan-down` → `make down` exports the evidence, stops Wazuh and Prometheus cleanly and applies `hosts_enabled=false`, which removes every session host (fw-ips with its Elastic IP and the `vpn` record, and the private hosts) (decisions 51, 142); the network stays up (decision 16). Each session starts with `make plan-up` → `make up` (decisions 41, 142)
 - The Wazuh data volume (20 GB gp3, encrypted, in `persistent`) costs about $1.90/month even between sessions (decision 88)
 - The Prometheus data volume (10 GB gp3, encrypted, in `persistent`) adds about $0.80/month once mon is built (decision 109)
 - Approx. compute ~$0.15/hour for the full set — a few hours per week stays within credits (verify in AWS Pricing Calculator)
 - mon adds a t3.small (about $0.024/hour) and siem a t3.large (about $0.096/hour, decision 99); with both, a full session is roughly $0.22/hour (decision 84)
 - Juice Shop adds a t3.small (about $0.024/hour) and its 10 GB disk only while `vuln_enabled` is on, plus a few hundred MB in ECR; no hourly fixed resource (decision 74)
+- Measured 2026-11-09: all seven hosts cost about $0.25/hour (about $1.35 for a 5.5-hour session); October 1 to November 9 came to about $5.40 in total (EC2 $3.90, EBS $0.72, Route 53 $0.50, public IPv4 $0.15), all covered by AWS credits. Between sessions the two data volumes, ECR and CloudTrail's S3 cost about $2.70/month
 
 ---
 
@@ -288,14 +290,14 @@ Everything runs on AWS. There is no VPS phase, and no VPS is used anywhere in th
 secure-mailbridge-lab/
   terraform/
     modules/      network/ security/ compute/   (shared)
-    persistent/   created once, never destroyed: encrypted VPN CA backup + secrets, Wazuh data volume, Prometheus data volume, flow log bucket, state bucket, Route 53 zone, ECR repo, CloudTrail and its bucket, budgets (the backup bucket comes with T2.3)sitory, Budget
+    persistent/   created once, never destroyed: generated secrets, Wazuh data volume, Prometheus data volume, flow log bucket, state bucket, Route 53 zone, ECR repositories, CloudTrail and its bucket, budgets (the backup bucket comes with T2.3)
     lab/          VPC, subnets, SGs (free, kept between sessions) · VMs, Elastic IP, vpn.<domain> record (removed after every session) (uses modules/)
-  ansible/        roles: fw_ips/ proxy/ app/ db/ vuln/ siem/ mon/   (Ansible role names cannot contain hyphens; the host stays fw-ips)
+  ansible/        site.yml · evidence.yml · stop.yml · roles: common/ fw_ips/ proxy/ app/ db/ vuln/ siem/ mon/ wazuh_agent/ node_exporter/ postgres_exporter/   (Ansible role names cannot contain hyphens; the host stays fw-ips)
   suricata-rules/ custom rules + test pcaps
   siem-certs/     wazuh-certs-tool input (config.yml) and the procedure; the certificates themselves are on the laptop and in SSM (decision 90)
-  attacks/        scope file and wrapper that refuses targets outside the lab (decision 75)
-  docs/           ARCHITECTURE.md · TASKS.md · decisions.md · rationale.md · progress.md · threat-model.md · findings-report.md · iso27001-map.md
+  attacks/        (Tier 2, 2.14) scope file and wrapper that refuses targets outside the lab (decision 75)
+  docs/           ARCHITECTURE.md · TASKS.md · decisions.md · rationale.md · progress.md · lessons.md · threat-model.md · findings-report.md · iso27001-map.md
   .github/workflows/
-  Makefile        plan-up · up · verify · plan-down · down: the session routine, applying only reviewed plan files (decision 142)
+  Makefile        plan-up · up · configure · verify · plan-down · down: the session routine, applying only reviewed plan files (decision 142)
   README.md       one-command deploy + teardown
 ```
