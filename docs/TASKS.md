@@ -262,6 +262,7 @@ Targets: own deployment only, never Google/Microsoft APIs. Each one follows atta
   - Verify: `get-trail-status` logging; a test call found in a delivered log file; `validate-logs` valid after the first digest; bucket not public; second plan clean
   - Done 2026-11-09 (PR 116, applied by Marko, 8 added): logging, multi-region, validation on; `DescribeKeyPairs` at 12:23:31Z found by `lookup-events` and in a delivered file; `validate-logs` 3/3 digests and 26/26 log files valid; `IsPublic: false`; second plan clean
 - [ ] **1.19** End-to-end check: VPN, `https://mail.<domain>`, OAuth login with test accounts · M+C
+  - 2026-11-09 (decision 145): the lab's own Google project and Entra registration, made by Marko; the four values in `/mailbridge/*` through a hidden prompt (lengths checked, no whitespace); `mailbridge-run` passes them like the other secrets, `app.conf` sets `MICROSOFT_TENANT=consumers`; `GMAIL_ALLOWED_EMAILS` stays empty, since Google's test-user list restricts sign-in
   - Verify: `nmap -sU -p 1194` and a TCP scan from outside show only UDP 1194 open
 - [ ] **1.20** Includes the deferred network rebuild (1.5c): `make up` rebuilds the lab from clean; second Ansible run is idempotent · M+C
   - Verify: second run reports `changed=0`

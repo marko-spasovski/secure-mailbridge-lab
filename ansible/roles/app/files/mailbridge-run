@@ -7,7 +7,14 @@
 POSTGRES_PASSWORD=$(ssm /mailbridge/db-app-password)
 SESSION_SECRET=$(ssm /mailbridge/session-secret)
 TOKEN_ENCRYPTION_KEY=$(ssm /mailbridge/token-encryption-key)
-export POSTGRES_PASSWORD SESSION_SECRET TOKEN_ENCRYPTION_KEY
+# The lab's own OAuth clients (task 1.19, decision 145), stored by Marko under
+# /mailbridge/; app's role already reads that path only.
+GOOGLE_CLIENT_ID=$(ssm /mailbridge/google-client-id)
+GOOGLE_CLIENT_SECRET=$(ssm /mailbridge/google-client-secret)
+MICROSOFT_CLIENT_ID=$(ssm /mailbridge/microsoft-client-id)
+MICROSOFT_CLIENT_SECRET=$(ssm /mailbridge/microsoft-client-secret)
+export POSTGRES_PASSWORD SESSION_SECRET TOKEN_ENCRYPTION_KEY \
+  GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET MICROSOFT_CLIENT_ID MICROSOFT_CLIENT_SECRET
 
 # Published on app's VPC address only, where sg-app admits proxy alone.
 # The heap limit keeps Node under the container's 512 MB.
@@ -17,5 +24,7 @@ exec docker run $hardening --name mailbridge \
   -e NODE_OPTIONS=--max-old-space-size=384 \
   -e POSTGRES_USER=mailbridge_app -e POSTGRES_PASSWORD \
   -e SESSION_SECRET -e TOKEN_ENCRYPTION_KEY \
+  -e GOOGLE_CLIENT_ID -e GOOGLE_CLIENT_SECRET \
+  -e MICROSOFT_CLIENT_ID -e MICROSOFT_CLIENT_SECRET \
   -p 10.0.3.10:3000:3000 \
   "$image"

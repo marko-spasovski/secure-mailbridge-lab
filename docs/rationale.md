@@ -1805,3 +1805,15 @@ For the server block: the same TLS 1.3, HSTS, `server_tokens` and ModSecurity co
 **Trade-off accepted.** The recipients are in the state file (it's private and encrypted, and it already holds every resource's attributes); a fresh clone needs the tfvars before any plan. Two budgets now send overlapping e-mails at 50 % and 100 % of different limits.
 
 **Verify.** The plan shows 2 to import and only tag changes; after the apply a second plan is clean; `aws budgets describe-budgets` lists both with their notifications unchanged.
+
+## 145. The lab's own OAuth clients (2026-11-09)
+
+**Problem.** Task 1.19 signs in to Mailbridge's Gmail and Outlook connections with test accounts. The app needs a client ID and secret per provider, a Microsoft authority, and optionally a Gmail invite list. Another deployment of Mailbridge already has OAuth clients of its own.
+
+**Options.** For the credentials: A, hand-made SecureString parameters under `/mailbridge/`, read at container start like the other secrets; B, the client IDs in a gitignored `group_vars` file and only the secrets in SSM. For the clients themselves: reuse the other deployment's, or make the lab its own.
+
+**Chosen: A, and the lab's own clients**, decided by Marko. The lab is a target in Tier 2, so its secrets have to be rotatable, or deletable at the end of the project, without touching anything else; each client lists only its own redirect URI, so an authorization code can't be sent from one environment to the other. A keeps one mechanism for every app secret (decision 56): `mailbridge-run` reads them, `-e NAME` copies them into the container without a value on the command line, and app's role already reads `/mailbridge/*`, so IAM is unchanged. Client IDs are public by design, but treating them the same costs nothing. `MICROSOFT_TENANT=consumers` is the narrowest authority that admits the personal test account. Google's Testing mode admits only listed test users, so `GMAIL_ALLOWED_EMAILS` stays empty and no address enters the config. The values were stored through `read -s` piped to `--value file:///dev/stdin`, so they never appeared on screen, in history or in a process list.
+
+**Trade-off accepted.** Two more consoles to maintain by hand, outside Terraform (decision 143). In Testing mode a Google test user's consent expires after 7 days, so a later session may need a new connect. The Microsoft secret expires after 180 days and must be renewed for later Tier 2 work.
+
+**Verify.** The four parameters exist as SecureString version 1 with plausible lengths and no whitespace; after deploy, `docker inspect mailbridge` shows the variable names but `docker inspect` of the run command line has no value; signing in with each test account connects its mailbox and shows its inbox; the app's log has no `invalid_client` or `redirect_uri_mismatch`.
