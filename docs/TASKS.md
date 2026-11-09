@@ -12,8 +12,8 @@ it is verified, and the relevant doc section is updated.
 
 ## Current position
 
-- **Phase:** 1, Tier 1 on AWS (0.6 done; 0.7 moved to Tier 2 as 2.17, decision 141)
-- **Next tasks, in order (decision 132):** the Tier 1 write-up (every Tier 1 task is done). Then Tier 2: the threat model (2.17, decision 141), the attacker tooling (2.14), the Juice Shop pentest (2.15), the Mailbridge scenarios (2.2 to 2.5). Done 2026-11-07/08: 1.22, 1.23, 2.8, 2.9, most of 2.10. Done 2026-11-09: 2.11, 2.12 and 2.13 verified live (2.11 and 2.12 rebuild from code with 1.20).
+- **Phase:** Tier 1 **complete** (2026-11-09, [`tier1-writeup.md`](tier1-writeup.md)); Tier 2 next
+- **Next tasks, in order (decision 132):** Tier 2: the threat model (2.17, Marko writes, Claude reviews) → the attacker tooling and GuardDuty (2.14) → the Juice Shop pentest (2.15) → the Mailbridge scenarios (2.2 to 2.5). Then Tier 2: the threat model (2.17, decision 141), the attacker tooling (2.14), the Juice Shop pentest (2.15), the Mailbridge scenarios (2.2 to 2.5). Done 2026-11-07/08: 1.22, 1.23, 2.8, 2.9, most of 2.10. Done 2026-11-09: 2.11, 2.12 and 2.13 verified live (2.11 and 2.12 rebuild from code with 1.20).
 - **Done:** 1.13 (`db`), 1.14 (`app`), 1.15 (`proxy`). The Suricata rules from PR 60 (decisions 79 to 81) are merged; their deploy and live re-test on fw-ips is pending.
 
 ## Before db (agreed 2026-11-02)
@@ -280,7 +280,7 @@ Targets: own deployment only, never Google/Microsoft APIs. Each one follows atta
 - [ ] **2.6** Switch to production Let's Encrypt certs, only when Marko says so · M+C
   - Verify: `curl https://mail.<domain>` succeeds without `-k`
 
-**Tier 1 is done here.** Tier 2, starting with the attacks, begins only after this write-up (decision 132).
+**Tier 1 is done here.** Tier 2, starting with the attacks, begins only after this write-up (decision 132). Done 2026-11-09: every Tier 1 task verified, and the write-up is [`tier1-writeup.md`](tier1-writeup.md) (PR 130), reviewed by Marko.
 
 ## Tier 2 (gated)
 
