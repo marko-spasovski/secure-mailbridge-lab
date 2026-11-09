@@ -36,6 +36,10 @@ server {
     ssl_session_timeout 1d;
     ssl_session_tickets off;
 
+    # One access log per site (decision 137), in the default combined format
+    # that Wazuh's web decoders parse; the file name tells mail from vuln.
+    access_log /var/log/nginx/vuln.access.log;
+
     server_tokens off;
     # Nginx alone sets HSTS (decision 62).
     proxy_hide_header Strict-Transport-Security;
