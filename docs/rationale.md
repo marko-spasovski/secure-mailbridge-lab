@@ -1682,4 +1682,4 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 
 **Trade-off accepted.** A host that is really down now costs up to four tries of 60 s plus three 10 s pauses (about 4.5 minutes) before the run fails, instead of 10 s. Integrity is unchanged: every download is still checked against its pinned SHA-256, so a slow or different server can't deliver a different file.
 
-**Verify.** The next fresh `site.yml` passes postgres_exporter's download; `ansible-playbook --check` on a configured host reports the download tasks `ok`; `grep -c 'timeout: 60'` across the roles counts 14.
+**Verify.** The next fresh `site.yml` passes postgres_exporter's download; `ansible-playbook --check` on a configured host reports the download tasks `ok`; `grep -rA1 'ansible.builtin.get_url:' ansible/roles | grep -c 'timeout: 60'` prints 14, the number of `get_url` tasks.
