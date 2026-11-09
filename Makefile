@@ -52,7 +52,10 @@ up: preflight
 # Only fw-ips is reachable at first: the private hosts reach SSM through its
 # NAT, which site.yml's first play sets up; each later play then waits for its
 # host with wait_for_connection (ARCHITECTURE §13).
+# A new fw-ips needs a minute or two before its SSM agent registers, so the
+# first contact retries (wait_for_connection) instead of failing at once.
 configure: preflight
+	cd ansible && ansible fw_ips -m ansible.builtin.wait_for_connection -a 'timeout=600'
 	cd ansible && ansible fw_ips -m ansible.builtin.command -a 'cloud-init status --wait'
 	cd ansible && ansible-playbook site.yml
 	@echo "Second run: every host must report changed=0"
