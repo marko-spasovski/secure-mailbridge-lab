@@ -139,6 +139,10 @@ NGINX_400 = b"HTTP/1.1 400 Bad Request\r\nServer: nginx\r\nContent-Length: 0\r\n
 write_pcap("tls13-small.pcap", session(client_hello13("mail.example.test", 32), server_hello(TLS12)))
 write_pcap("tls13-big-1seg.pcap", split_session(client_hello13("mail.example.test", 1216), server_hello(TLS12), 4000))
 write_pcap("tls13-big-2seg.pcap", split_session(client_hello13("mail.example.test", 1216), server_hello(TLS12), 1300))
+# Task 2.11: vuln.<domain> is a real site on proxy, so it must stay silent
+# on 1000003, in the simple form and as a large two-segment TLS 1.3 hello.
+write_pcap("vuln-sni.pcap", session(client_hello(TLS12, "vuln.example.test"), server_hello(TLS12)))
+write_pcap("vuln-tls13-big-2seg.pcap", split_session(client_hello13("vuln.example.test", 1216), server_hello(TLS12), 1300))
 write_pcap("no-sni.pcap", session(client_hello(TLS12, None), server_hello(TLS12)))
 write_pcap("binary-nginx400.pcap", session(bytes(range(7, 71)), NGINX_400))
 write_pcap("text-nginx400.pcap", session(b"hello\n", NGINX_400))

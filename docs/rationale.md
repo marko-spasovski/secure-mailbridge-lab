@@ -1684,6 +1684,18 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 
 **Verify.** The next fresh `site.yml` passes postgres_exporter's download; `ansible-playbook --check` on a configured host reports the download tasks `ok`; `grep -rA1 'ansible.builtin.get_url:' ansible/roles | grep -c 'timeout: 60'` prints 14, the number of `get_url` tasks.
 
+## 135. Rule 1000003 allows vuln's name (2026-11-09)
+
+**Problem.** Rule 1000003 alerts on a TLS server name to proxy that doesn't start with `mail.`. Task 2.11 makes `vuln.<domain>` a second real site on proxy, so every visit to it would raise "unexpected TLS server name". Replaying the captures confirmed it: the two new vuln captures each alerted with rev 1.
+
+**Options.** A: a second negated, anchored content (`content:!"vuln."; nocase; startswith`) beside mail's, so the rule fires only when the name starts with neither. B: match the full names, including the real domain. C: retire the rule, since Nginx refuses unknown names anyway.
+
+**Chosen: A.** Each negated content is anchored at the start of the `tls.sni` buffer, so both must fail to match. B would write the real domain into this public repo (or need a templated rules file). C loses the only signal of a client probing names, which Nginx refuses without logging the name. `nocase` was added after a test: DNS names and Nginx's `server_name` are case-insensitive, so `VULN.<domain>` reaches the site, and rev 1 would have alerted on it too.
+
+**Trade-off accepted.** Only the prefix is checked, so `mail.evil.example` or `vuln.evil.example` pass; Nginx then refuses the handshake, so the cost is a missed alert, not access. A ClientHello without SNI is still invisible to this rule (the no-SNI gap, decision 82).
+
+**Verify.** In a Suricata 7.0.3 container: `vuln-sni` and `vuln-tls13-big-2seg` silent, `bad-sni` one 1000003, every other capture unchanged; scratch captures `x.vuln.`, `vulnx.` and `evil.mail.` alert, `VULN.` and `vuln.` don't. Live: a visit to `vuln.<domain>` adds no 1000003 to `eve.json`, and `openssl s_client -servername other.test` to 10.0.2.10 adds one.
+
 ## 136. Two certificates, one unit file; vuln's server block (2026-11-09)
 
 **Problem.** Decision 70 gives `vuln.<domain>` its own certificate, but proxy had one lego unit pair with one settings file and one "renewed" marker. Juice Shop also needs a server block that matches mail's defences (decision 129) and works with its WebSocket notifications.
