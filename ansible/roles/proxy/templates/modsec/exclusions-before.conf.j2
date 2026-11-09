@@ -50,3 +50,28 @@ SecRule REQUEST_METHOD "@streq PUT" \
         ctl:ruleRemoveTargetByTag=attack-ssti;ARGS:json.image,\
         ctl:ruleRemoveTargetByTag=attack-fixation;ARGS:json.image,\
         ctl:ruleRemoveTargetByTag=attack-protocol;ARGS:json.image"
+
+# --- Juice Shop's socket.io long-polling (decision 139) ----------------------
+# The Juice Shop web app opens a socket.io connection on every page (its live
+# challenge notifications). socket.io starts with HTTP long-polling and sends
+# its packets as POST /socket.io/?EIO=4&transport=polling with Content-Type
+# text/plain, which the CRS default list doesn't allow: 920420 scores 5 and
+# 949110 answers 403, so the connection never opens. Only 920420 is removed,
+# and only when all five conditions match; mail, every other route and every
+# other content type stay as strict as before. A text/plain body isn't parsed
+# into ARGS, so rules that read only ARGS don't see these payloads: accepted,
+# because they carry only notifications.
+SecRule REQUEST_HEADERS:Host "@streq vuln.{{ domain }}" \
+    "id:10020,\
+    phase:1,\
+    pass,\
+    nolog,\
+    t:none,t:lowercase,\
+    tag:'local/socketio',\
+    chain"
+    SecRule REQUEST_METHOD "@streq POST" "chain"
+        SecRule REQUEST_FILENAME "@streq /socket.io/" "chain"
+            SecRule ARGS_GET:transport "@streq polling" "chain"
+                SecRule REQUEST_HEADERS:Content-Type "@rx ^text/plain(?:;\s*charset=utf-8)?$" \
+                    "t:none,t:lowercase,\
+                    ctl:ruleRemoveById=920420"
