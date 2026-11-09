@@ -3,7 +3,7 @@
 # Same trust policy and SSM baseline as the other hosts (decision 22).
 resource "aws_iam_role" "proxy" {
   name               = "${var.name}-proxy"
-  description        = "proxy instance role: SSM agent, and TXT changes to the _acme-challenge name in the lab zone only"
+  description        = "proxy instance role: SSM agent, and TXT changes to the mail and vuln _acme-challenge names in the lab zone only"
   assume_role_policy = data.aws_iam_policy_document.ec2_assume.json
 }
 
@@ -13,9 +13,10 @@ resource "aws_iam_role_policy_attachment" "proxy_ssm_min" {
 }
 
 # DNS-01 for lego (decisions 59, 60). proxy is the most exposed host, so the
-# change grant is limited to one name, one type and two actions: an attacker
-# there can't repoint vpn.<domain>. ForAllValues makes every record in a
-# request match. Normalized names are lower case without the trailing dot.
+# change grant is limited to the two challenge names (mail, and vuln from
+# decision 70), one type and two actions: an attacker there can't repoint
+# vpn.<domain>. ForAllValues makes every record in a request match.
+# Normalized names are lower case without the trailing dot.
 data "aws_iam_policy_document" "proxy_acme" {
   statement {
     sid       = "ChangeAcmeChallengeTxtOnly"
@@ -26,7 +27,10 @@ data "aws_iam_policy_document" "proxy_acme" {
     condition {
       test     = "ForAllValues:StringEquals"
       variable = "route53:ChangeResourceRecordSetsNormalizedRecordNames"
-      values   = ["_acme-challenge.mail.${lower(var.domain)}"]
+      values = [
+        "_acme-challenge.mail.${lower(var.domain)}",
+        "_acme-challenge.vuln.${lower(var.domain)}",
+      ]
     }
 
     condition {
