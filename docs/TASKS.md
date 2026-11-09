@@ -247,8 +247,9 @@ Targets: own deployment only, never Google/Microsoft APIs. Each one follows atta
 - [x] **2.16** ~~Juice Shop window run (2.1)~~ Dropped 2026-11-08 (decision 129) · M
 
 **Close-out (after the Juice Shop block, decision 83)**
-- [ ] **1.18** CloudTrail to S3, GuardDuty trial · C
-  - Verify: events visible; trial end date noted in `progress.md`
+- [ ] **1.18** CloudTrail to S3 · C
+  - Decided 2026-11-09 (decision 140): the trail and its bucket in `persistent` (`cloudtrail.tf`), multi-region, management events, log file validation; GuardDuty moves to 2.14
+  - Verify: `get-trail-status` logging; a test call found in a delivered log file; `validate-logs` valid after the first digest; bucket not public; second plan clean
 - [ ] **1.19** End-to-end check: VPN, `https://mail.<domain>`, OAuth login with test accounts · M+C
   - Verify: `nmap -sU -p 1194` and a TCP scan from outside show only UDP 1194 open
 - [ ] **1.20** Includes the deferred network rebuild (1.5c): `make up` rebuilds the lab from clean; second Ansible run is idempotent · M+C
@@ -266,7 +267,7 @@ Targets: own deployment only, never Google/Microsoft APIs. Each one follows atta
 
 **Attacks (decision 132).** Tier 1 builds every layer and learns how it behaves; every attack waits for Tier 2. Order: the attacker tooling, then the Juice Shop pentest, then the Mailbridge scenarios.
 
-- [ ] **2.14** Attacker device certificate in the user pool (decision 73); `attacks/scope.conf` and the wrapper with rate caps (decision 75); separate browser profile for Juice Shop (decision 76) · M+C
+- [ ] **2.14** Attacker device certificate in the user pool (decision 73); `attacks/scope.conf` and the wrapper with rate caps (decision 75); separate browser profile for Juice Shop (decision 76); enable GuardDuty, which starts its 30-day trial, and note the end date in `progress.md` (decision 140) · M+C
   - Verify: attacker profile gets 10.8.0.x; the wrapper refuses 10.0.0.2, a public IP and `mail.<domain>` in a Juice Shop run
 - [ ] **2.15** Pentest of the full application (decision 129): reconnaissance, the OWASP Top 10 classes and Juice Shop's challenges, from the attacker certificate through the scope wrapper with rate caps, against the regular defences · M
   - Verify: `findings-report.md` has one entry per finding: what the attacker achieved, and which layer stopped, saw or missed it
