@@ -1,0 +1,14 @@
+# Managed by Ansible (proxy role). Daily check of one certificate; lego
+# decides whether it is due. lego-renew@<name>.timer starts
+# lego-renew@<name>.service. Persistent catches up a run missed while the host was
+# off; the random delay spreads the load on the CA, as Let's Encrypt asks.
+[Unit]
+Description=Daily lego check of the %i certificate
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

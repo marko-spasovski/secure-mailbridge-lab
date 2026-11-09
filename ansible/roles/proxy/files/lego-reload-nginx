@@ -1,10 +1,15 @@
 #!/bin/sh
-# Managed by Ansible (proxy role). Run as root by lego-renew.service after
-# lego exits. Reloads Nginx only if lego's deploy hook marked a new
-# certificate. If the config doesn't parse, the marker stays and the
-# service fails, so the next run tries again and the failure is visible.
+# Managed by Ansible (proxy role). Run as root by lego-renew@<name>.service
+# after lego exits, with the name as its argument. Reloads Nginx only if
+# lego's deploy hook marked a new certificate for that name. If the config
+# doesn't parse, the marker stays and the service fails, so the next run
+# tries again and the failure is visible.
 set -eu
-marker=/var/lib/lego/renewed
+case "${1:-}" in
+  mail | vuln) ;;
+  *) echo "usage: lego-reload-nginx mail|vuln" >&2; exit 2 ;;
+esac
+marker=/var/lib/lego/renewed-$1
 [ -e "$marker" ] || exit 0
 /usr/sbin/nginx -t -q
 /usr/bin/systemctl reload nginx

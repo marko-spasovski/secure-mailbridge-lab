@@ -127,8 +127,9 @@
     fail_msg: No public zone named {{ domain }} was found.
     quiet: true
 
-# All of lego's settings, so the timer's service and the first run are the
-# same command. No secret: AWS credentials come from the instance role.
+# All of lego's settings, one file per name, so the timer's service and the
+# first run are the same command. No secret: AWS credentials come from the
+# instance role.
 - name: Create lego's config directory
   ansible.builtin.file:
     path: /etc/lego
@@ -137,13 +138,14 @@
     group: root
     mode: "0755"
 
-- name: Write lego's settings
+- name: Write lego's settings for each site
   ansible.builtin.template:
     src: lego.env.j2
-    dest: /etc/lego/lego.env
+    dest: /etc/lego/{{ item }}.env
     owner: root
     group: root
     mode: "0644"
+  loop: "{{ proxy_sites }}"
 
 - name: Install the reload step
   ansible.builtin.copy:
@@ -153,7 +155,33 @@
     group: root
     mode: "0755"
 
-- name: Install the renewal service and timer
+# Before task 2.11 there was one certificate and one unit pair without an
+# instance name. A proxy built before then still has them; stop and remove
+# them so only the template instances renew. Nothing happens on a new host.
+- name: Check for the single-site renewal timer
+  ansible.builtin.stat:
+    path: /etc/systemd/system/lego-renew.timer
+  register: proxy_old_timer
+
+- name: Stop the single-site renewal timer
+  ansible.builtin.systemd_service:
+    name: lego-renew.timer
+    state: stopped
+    enabled: false
+  when: proxy_old_timer.stat.exists
+
+- name: Remove the single-site renewal files
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/lego-renew.service
+    - /etc/systemd/system/lego-renew.timer
+    - /etc/lego/lego.env
+    - /var/lib/lego/renewed
+  notify: Reload systemd
+
+- name: Install the renewal service and timer templates
   ansible.builtin.copy:
     src: "{{ item }}"
     dest: /etc/systemd/system/{{ item }}
@@ -161,33 +189,38 @@
     group: root
     mode: "0644"
   loop:
-    - lego-renew.service
-    - lego-renew.timer
+    - lego-renew@.service
+    - lego-renew@.timer
   notify: Reload systemd
 
 - name: Load the new units before using them
   ansible.builtin.meta: flush_handlers
 
 # The first certificate comes from the same service the timer runs, so the
-# first run also proves the timer's path. Only once: afterwards the timer
-# renews it.
-- name: Check for an existing certificate
+# first run also proves the timer's path. Only once per name: afterwards the
+# timer renews it.
+- name: Check for existing certificates
   ansible.builtin.stat:
-    path: /var/lib/lego/certificates/mail.{{ domain }}.crt
-  register: proxy_cert
+    path: /var/lib/lego/certificates/{{ item }}.{{ domain }}.crt
+  loop: "{{ proxy_sites }}"
+  register: proxy_certs
 
 # A oneshot start waits until lego has finished.
-- name: Get the first certificate
+- name: Get the first certificate for each site
   ansible.builtin.systemd_service:
-    name: lego-renew.service
+    name: lego-renew@{{ item.item }}.service
     state: started
-  when: not proxy_cert.stat.exists
+  loop: "{{ proxy_certs.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: not item.stat.exists
 
-- name: Enable the renewal timer
+- name: Enable the renewal timers
   ansible.builtin.systemd_service:
-    name: lego-renew.timer
+    name: lego-renew@{{ item }}.timer
     enabled: true
     state: started
+  loop: "{{ proxy_sites }}"
 
 # --- ModSecurity and the CRS -----------------------------------------------
 
@@ -316,5 +349,33 @@
   ansible.builtin.file:
     src: /etc/nginx/sites-available/mail.conf
     dest: /etc/nginx/sites-enabled/mail.conf
+    state: link
+  notify: Reload Nginx
+
+# Juice Shop (task 2.11, decisions 70, 129): its own certificate and server
+# block on the same listener, with mail's TLS, ModSecurity and rate-limit
+# pattern, forwarded to the vuln host through fw-ips.
+- name: Install the Juice Shop forwarding snippet
+  ansible.builtin.template:
+    src: vuln-proxy.conf.j2
+    dest: /etc/nginx/snippets/vuln-proxy.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload Nginx
+
+- name: Install the vuln site
+  ansible.builtin.template:
+    src: vuln.conf.j2
+    dest: /etc/nginx/sites-available/vuln.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload Nginx
+
+- name: Enable the vuln site
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/vuln.conf
+    dest: /etc/nginx/sites-enabled/vuln.conf
     state: link
   notify: Reload Nginx

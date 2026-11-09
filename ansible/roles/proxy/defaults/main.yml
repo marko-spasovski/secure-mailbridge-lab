@@ -1,7 +1,16 @@
 ---
-# proxy's own address and the one upstream it forwards to (ARCHITECTURE.md §1).
+# proxy's own address and the upstreams it forwards to (ARCHITECTURE.md §1):
+# Mailbridge directly, Juice Shop through fw-ips (decision 68).
 proxy_private_ip: 10.0.2.10
 proxy_app_upstream: 10.0.3.10:3000
+proxy_vuln_upstream: 10.0.6.10:3000
+
+# The sites proxy serves, each <name>.<domain> with its own certificate and
+# lego-renew@<name> instance (decision 70). The reload step accepts only
+# these names.
+proxy_sites:
+  - mail
+  - vuln
 
 # lego, pinned like the image digest (decision 59). To update: download the
 # new linux_amd64 archive on the laptop, run
@@ -53,3 +62,6 @@ proxy_limit_general_rate: 20r/s
 proxy_limit_general_burst: 50
 proxy_limit_auth_rate: 6r/m
 proxy_limit_auth_burst: 5
+
+# Juice Shop gets the same numbers in its own zones (decision 129), so one
+# site's traffic never uses up the other's allowance.
