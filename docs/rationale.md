@@ -1697,3 +1697,15 @@ For the server block: the same TLS 1.3, HSTS, `server_tokens` and ModSecurity co
 **Trade-off accepted.** Juice Shop's password change is a `GET` (`/rest/user/change-password`), which the POST-keyed auth limit doesn't count; only the general limit applies to it, a Tier 2 finding candidate. A new certificate is requested whenever proxy is rebuilt, fine on staging (the open item on keeping certificates before 2.6).
 
 **Verify.** `systemctl list-timers 'lego-renew@*'` shows two timers; vuln's certificate has only `vuln.<domain>` as SAN and a staging issuer; mail's certificate fingerprint is unchanged; `curl https://vuln.<domain>/` returns 200 over the VPN; seven login POSTs to vuln give 429 on the seventh; a mail login right after isn't limited; the second run reports `changed=0`.
+
+## 137. One access log per site (2026-11-09)
+
+**Problem.** Task 2.13 needs Wazuh to tell mail's traffic from Juice Shop's: a pentest finding has to say which application was hit, and a brute-force alert on mail is a different incident from one on vuln. Both sites share proxy's listener and wrote one `access.log` in Nginx's combined format, which has no Host field. The error log (`server:`, `host:`) and the ModSecurity audit log (request headers) already name the site.
+
+**Options.** A: an `access_log` per server block, same combined format, one Wazuh `localfile` each. B: a JSON `log_format` with `$host`, read as JSON. C: add `$host` to a custom text format.
+
+**Chosen: A.** Wazuh's `web-accesslog` decoder and the built-in web rules (31101 4xx, 31103–31105 SQLi, attack and XSS patterns, 31151 bursts) parse exactly the combined format, and decision 133 says built-in rules come first. Every alert carries `location`, the file it came from, so the site is in each alert for free. B and C change the line the decoder expects, so those rules would stop firing, and every one would have to be rewritten as a local rule.
+
+**Trade-off accepted.** Two files to read and rotate instead of one (Ubuntu's logrotate already covers `/var/log/nginx/*.log`, and the evidence export copies the same glob). The access log still holds no request bodies, by design (decision 66).
+
+**Verify.** After a run, `/var/log/nginx/mail.access.log` and `vuln.access.log` fill and `access.log` stays still; a 4xx on each site raises 31101 with `location` `/var/log/nginx/<site>.access.log`; the second run reports `changed=0`.
