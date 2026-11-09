@@ -1382,3 +1382,122 @@ The egress block has two parts, because Docker's `DOCKER-USER` chain only sees t
 ### What comes next
 
 Next session: `Read START.md`, the routine with `-var vuln_enabled=true` (expect **12 to add**), the persistence checks (2026-11-08 index 6,973 alerts with earliest rule 100102 at 00:00:02Z, Prometheus's oldest sample 2026-11-07T21:13:08Z, certificate `CB:76:56:E8`), then 2.11: proxy serves `vuln.<domain>` with its own certificate. Tier 1 then continues with 2.12, 2.13 and the close-out 1.18 to 1.21; all attacks wait for Tier 2.
+
+## 2026-11-09
+
+### Today's topic: proving the defences work, then putting the account itself under control
+
+Yesterday built Juice Shop's host and isolated it. Today had two halves. In the first, we gave Juice Shop the same front door as Mailbridge (its own name, certificate, WAF and rate limits) and then proved, with real traffic, that every detection we claimed actually fires. In the second, we stopped treating the AWS account as a place where things are clicked into existence: CloudTrail records every API call, the last hand-built pieces moved into Terraform, and the whole session routine became a Makefile.
+
+### The big picture
+
+A security lab has three layers of "is it working?". First, **does each control exist** (the config is deployed). Second, **does it do what we say** (a test event produces the expected block or alert). Third, **can we prove nobody changed it behind our back** (audit logs and infrastructure as code). Until today the lab was strong on the first, partly done on the second, and weak on the third: the state bucket, the flow-log bucket, the DNS zone and the budgets lived only in the console, and nothing recorded who called which AWS API. By the end of the day all three layers were covered for everything Tier 1 builds.
+
+The other theme was **recovery**. The laptop ran out of RAM mid-session and the conversation was lost. Nothing was lost in practice, because the repo (`progress.md`, `TASKS.md`, git history) and the running hosts held the truth: we compared the deployed Wazuh rules with `main` by SHA-256, saw that rule 100120 had already fired, and knew exactly where to resume. That is the payoff of writing state down instead of keeping it in your head.
+
+### Part 1: Checking what is deployed, not what you remember
+
+The question "did I deploy PR 112?" was answered with evidence, not memory: the rules file on siem had the same SHA-256 as the one in the repo, its modification time was after the merge, the manager had restarted after that, and `ossec.log` had no errors. This is the same idea as file integrity monitoring: compare a hash, don't trust a timestamp or a recollection.
+
+### Part 2: Detection that has to work for two sites (decisions 137, 138)
+
+Wazuh's built-in rules already decode Nginx and ModSecurity lines, but some events stop at level 0 or 3 and never become useful alerts. Decision 138 added local rules only for those gaps. Then we tested each one live:
+
+- **100210** fires on each POST answered 401 (a refused sign-in). **100211** is a *frequency* rule: 10 of them from one address in 5 minutes means password guessing (MITRE ATT&CK T1110). A detail worth remembering: when the frequency rule fires, Wazuh reports the event that completed the count as 100211, not as another 100210. So 16 refusals gave 15 + 1 alerts, and nothing was lost.
+- **100212** and **100213** turn Nginx's "limiting requests" error lines into alerts, one for the sign-in zone and one for the general zone.
+- **100120** fires on every connection the Juice Shop container tries to open (egress, T1071).
+
+The first brute-force test produced a surprise that is actually a design lesson: a fast burst of sign-ins never reached 10 refusals, because Nginx's sign-in limit (6 per minute, burst 5) answered the rest with 429. **The layers cover each other**: a fast guesser is stopped by Nginx and shows up as 100212; a slow guesser stays under the limit and is caught by 100211. A rule that "doesn't fire" is not always broken; sometimes an earlier layer stopped the attack first.
+
+The per-site access logs (decision 137) are what let each alert name the application that was hit: `mail.access.log` or `vuln.access.log`. A finding that can't say which app was attacked isn't useful.
+
+### Part 3: The mystery of the slow requests, solved by the IPS
+
+Thirty curl processes in parallel peaked at about 6 requests per second, while one request took 0.25 s. It looked like something on the path was queueing. The answer was in Suricata's `eve.json`: rule **1000004** ("connection flood", `drop`, more than 60 SYNs from one source in 10 seconds) had dropped 1,050 SYNs during those tests. The clients retransmitted after 1 s, 3 s and so on, so each request took about 5 s. In other words, the IPS stopped the flood before Nginx ever saw it.
+
+To test Nginx's general limit we sent 150 requests over **one HTTP/2 connection** (multiplexing: many requests, one TCP and TLS handshake). That got past the SYN rule and reached Nginx's limiter, which answered 55 of them with 429. Two lessons here: always check every layer's logs before calling something a performance problem, and remember that Nginx's `limit_req` counts requests while Suricata's flood rule counts connections. They measure different things.
+
+### Part 4: Tuning a WAF like a production app (decision 139)
+
+Decision 129 says Juice Shop gets exactly mail's ModSecurity configuration, and false positives are tuned the way a real company would tune them. The API flows (register, log in, basket, address, card, checkout, review) all passed. Then socket.io failed: its long-polling transport sends packets as `POST /socket.io/?transport=polling` with `Content-Type: text/plain`, and CRS rule **920420** allows only form, multipart, XML and JSON bodies. Every page's live connection got 403.
+
+The options were: lift 920420 for exactly that traffic (A), add `text/plain` to the allowed list everywhere (B), or leave it broken (C). We chose A: rule **10020** removes only 920420, and only when the Host, method, path, `transport` parameter and Content-Type all match. B would let any route accept an uninspected `text/plain` body, which is an evasion path across the whole WAF. The trade-off we accepted: ModSecurity has no body parser for `text/plain`, so rules that read only `ARGS` don't inspect socket.io payloads on that one route.
+
+**The interview point:** you never turn a rule off because of a false positive. You scope an exception to the legitimate traffic and write down what you give up.
+
+The test harness taught a lesson of its own. The first version answered with `return 200` in the Nginx location, and *everything* passed, SQL injection included. `return` runs in Nginx's rewrite phase, before ModSecurity inspects the request. A backend behind `proxy_pass` fixed it. A test that can't fail proves nothing, so always include a case that must be blocked (here, a plain SQLi) as a sanity check.
+
+### Part 5: Allow-listing names in an IDS rule (decision 135)
+
+Suricata rule 1000003 alerts when a TLS client asks proxy for a name that isn't one of its sites. Rev 1 knew only `mail.`, so today's `eve.json` held 367 false alerts for `vuln.`. Rev 2 has two negated, anchored contents (`content:!"mail."; nocase; startswith; content:!"vuln."; nocase; startswith;`), so it fires only when the name starts with neither. `nocase` matters because DNS names are case-insensitive. Live, after the deploy: one alert for `other.test`, none for `vuln.`, `VULN.` or `mail.`. It still has a known gap: `mail.evil.example` passes the prefix check, but Nginx then refuses the handshake, so the cost is a missed alert, not access.
+
+While replaying captures we also found that rule **1000002** (TLS 1.0) can't fire at all: `tls.version` matches the *negotiated* version, which doesn't exist yet when the ClientHello arrives. That is now an open item. A rule that has never fired in testing should make you suspicious, not reassured.
+
+### Part 6: CloudTrail, the audit log of the control plane (decision 140)
+
+Host logs can't tell you that someone used proxy's role credentials to change a DNS record. CloudTrail can: it records every management API call, with who, when, from where and the result. Design choices and why:
+
+- **In `persistent`, always on.** The account is most exposed between sessions, when nobody is watching. A trail that disappears at every teardown would leave exactly those hours unrecorded, and "the trail stopped" is what an attacker would cause.
+- **Multi-region.** Stolen keys are typically used in regions the owner never opens.
+- **Log file validation.** Every hour CloudTrail writes a digest file with the hashes of the logs it delivered, signed by AWS. `aws cloudtrail validate-logs` then proves no log was edited or deleted. Today: 3 of 3 digests and 26 of 26 log files valid.
+- **The bucket policy uses `aws:SourceArn`.** Only *this* trail may write. Without it, another account's trail could use your bucket: the "confused deputy" problem.
+- **GuardDuty waits for Tier 2.** Its 30-day free trial starts when you enable it, and Tier 1 has no attacks, so enabling it now would waste the trial.
+
+A small incident taught how saved plans work: the apply was run twice. The first one succeeded; the second said "Saved plan is stale" because the state had moved on. That error is a safety feature, not a failure.
+
+### Part 7: The Makefile, and why it never applies by itself (decision 142)
+
+"Done" in this project means "deploys with `make up`". The routine was a list of commands typed by hand, with a Wazuh shutdown that existed only in our heads. The Makefile has `plan-up`, `up`, `verify`, `plan-down` and `down`, and three ideas make it safe:
+
+1. **Only reviewed plans get applied.** `plan-up` saves a plan file; `up` applies exactly that file and then deletes it, so it can't be applied twice or after the state moved on.
+2. **Idempotence is a gate.** `up` runs `site.yml` twice and fails if the second run's recap shows `changed=[1-9]` anywhere.
+3. **Stop cleanly before destroying.** `stop.yml` asks the Wazuh indexer to `_flush` and asserts that `_shards.failed` is 0 *before* stopping anything. If the flush fails, nothing is stopped and the data volume stays attached. Then it stops the dashboard, Filebeat, the manager and finally the indexer (readers first, the indexer last), plus Prometheus.
+
+The first real `make down` passed in 1 min 24 s, with five evidence archives, `flushed 37 shards, failed: 0`, `12 destroyed` and `left: 0 instances, 0 Elastic IPs`. Make is used only as a task runner here: every target is `.PHONY`, and `bash -euo pipefail` stops at the first failing step.
+
+### Part 8: Importing what was clicked into existence (decisions 143, 144)
+
+`import` blocks (Terraform 1.5+) tell Terraform "this existing resource is now yours" inside a normal, reviewable plan. The rule for a clean import is to **write the code to match what is live**, then iterate until the plan shows only imports. Today's plan first showed five "changes". Two of them weren't real:
+
+- The bucket policy looked fully replaced, because the policy document read the bucket's ARN from a resource with a pending tag change, which deferred the document to apply time. Building the ARN from the name fixed it.
+- The lifecycle rule wanted to add an empty `filter {}` that is already live; the provider reads an empty filter back as missing, so keeping it would show a change on every plan. Dropping it fixed that.
+
+After that the plan was 12 imports and 3 tag changes. `prevent_destroy` now makes any plan that would delete the state bucket, the flow-log bucket or the zone fail.
+
+**What we deliberately did not import:** the 20 hand-made SSM parameters (CA private keys, certificates, the webhook URL). Importing a parameter copies its decrypted value into the state file, so the CA keys would sit in plain text in the state bucket. Instead they are listed in ARCHITECTURE §7 with the procedure that makes each. Afterwards, `terraform state list` showed only the 10 generated, write-only parameters.
+
+The budgets name e-mail recipients, and Terraform has to list every subscriber or it deletes them. Personal addresses can't go in a public repo, so they live in the gitignored `terraform.tfvars` as `sensitive` variables, which plans print as `(sensitive value)`. Because the masked notification blocks showed `~`, we compared the plan's JSON field by field and proved that only the tag changed.
+
+### Mistakes and what they taught
+
+- **The harness that blocked nothing** (Part 4): a test without a must-fail case can't be trusted.
+- **Calling the slowdown "queueing"** before reading Suricata's log (Part 3): check every layer first.
+- **zsh ate part of an ARN.** In zsh, `$A:repository` applied the `:r` modifier (strip an extension) to `$A`, so the simulator got invalid ARNs and returned `implicitDeny` for everything, including actions that are allowed. `${A}` fixed it. When every result is a deny, suspect the test before the policy.
+- **A verify line that could never pass.** 2.9 asked for `http` events in `eve.json`, but our Suricata configuration never logs that event type. The same fact shows in `flow` events with `app_proto: http` (406 proxy → Juice Shop flows, 0 to app). Verify lines must match what the configuration actually records.
+- **PR 109 sat unmerged for half a day**, so the live IDS raised 367 false alerts. A merge that waits for review should be visible in the session notes.
+
+### Decisions from this session
+
+134 (download timeouts), 135 (1000003 rev 2), 136 (two certificates, one unit file; vuln's server block), 137 (one access log per site), 138 (local Wazuh rules for the gaps), 139 (rule 10020 for socket.io), 140 (CloudTrail in `persistent`, GuardDuty with Tier 2), 141 (the threat model opens Tier 2), 142 (the Makefile), 143 (what `persistent` imports and what it doesn't), 144 (the budgets).
+
+### Interview questions to practise
+
+1. Why did a fast password-guessing burst never trigger your brute-force rule, and why is that acceptable?
+2. What does a Wazuh frequency rule do with the event that completes its count?
+3. Nginx's `limit_req` and Suricata's SYN flood rule both limit "traffic". What does each one count, and how did you get past one to test the other?
+4. A WAF rule blocks legitimate traffic. Walk me through how you fix it without weakening the WAF.
+5. Why did your ModSecurity test harness pass a SQL injection, and how do you design tests that can't silently pass?
+6. Why does `tls.version` in a ClientHello-stage Suricata rule never match?
+7. What does CloudTrail log file validation prove, and how does it work?
+8. What is the confused-deputy problem, and how does `aws:SourceArn` prevent it in a bucket policy?
+9. Why does the trail live in `persistent` and not in the per-session stack?
+10. Why wait to enable GuardDuty?
+11. What makes your `make up` safe to run, given that you never let tooling apply Terraform unreviewed?
+12. Why flush the indexer before stopping it, and why stop the services in that order?
+13. How do you import a hand-built resource without changing it, and how do you tell a real plan diff from a cosmetic one?
+14. Why are your CA private keys not managed by Terraform, and what control replaces that?
+15. How do you keep personal data such as e-mail addresses out of a public IaC repo while still managing the resource in code?
+
+### What comes next
+
+Next session: `Read START.md`, then `make plan-up` (expect **12 to add**), Marko runs `make up`, then `make verify`. After that comes **1.20**: rebuild the lab from clean, including the network (1.5c), with proxy's rebuild closing 2.11 and 2.12. Then **1.19**, the end-to-end check, which needs the Google and Microsoft test accounts ready. Then 1.21 and the Tier 1 write-up.
