@@ -272,7 +272,7 @@ Everything runs on AWS. There is no VPS phase, and no VPS is used anywhere in th
 
 1. Tier 1 on AWS: network (VPC, subnets, IGW, routes, SGs — free) → fw-ips (OpenVPN, then NAT, because private hosts reach SSM through it) → db → app → proxy → siem → mon (decision 84) → the vuln target (decision 67) → close-out (decision 83). Built bottom-up, so each host is tested against its real dependency.
 2. Tier 1 close-out (CloudTrail, end-to-end check, rebuild from clean) → Tier 1 write-up; Tier 1 contains no attacks (decision 132)
-3. Tier 2: the attacks first (attacker tooling, the Juice Shop pentest, the Mailbridge scenarios → findings report, decision 132), then CI, backups + restore test (monitoring moved into Tier 1, decision 84)
+3. Tier 2: the threat model first, written from the finished Tier 1 lab (decision 141), then the attacks (attacker tooling, the Juice Shop pentest, the Mailbridge scenarios → findings report, decision 132), then CI, backups + restore test (monitoring moved into Tier 1, decision 84)
 4. Tier 3: k3s for app tier, vuln scanning (Nuclei/Greenbone), ISO 27001/NIS2 controls map
 
 **Method for each layer:** build by hand → test → compare with code (`terraform import` + `plan`, or `ansible-playbook --check --diff`) → destroy and rebuild from code → re-test. The final state is always Terraform + Ansible. Exception: the network layer stays up between sessions and its rebuild test is deferred to task 1.20; paid resources are still removed after each session.

@@ -12,8 +12,8 @@ it is verified, and the relevant doc section is updated.
 
 ## Current position
 
-- **Phase:** 1, Tier 1 on AWS (0.6 and 0.7 still open)
-- **Next tasks, in order (decision 132):** close-out 1.18 to 1.21 → the Tier 1 write-up. Then Tier 2: the attacker tooling (2.14), the Juice Shop pentest (2.15), the Mailbridge scenarios (2.2 to 2.5). Done 2026-11-07/08: 1.22, 1.23, 2.8, 2.9, most of 2.10. Done 2026-11-09: 2.11, 2.12 and 2.13 verified live (2.11 and 2.12 rebuild from code with 1.20).
+- **Phase:** 1, Tier 1 on AWS (0.6 still open; 0.7 moved to Tier 2 as 2.17, decision 141)
+- **Next tasks, in order (decision 132):** close-out 1.18 to 1.21 → the Tier 1 write-up. Then Tier 2: the threat model (2.17, decision 141), the attacker tooling (2.14), the Juice Shop pentest (2.15), the Mailbridge scenarios (2.2 to 2.5). Done 2026-11-07/08: 1.22, 1.23, 2.8, 2.9, most of 2.10. Done 2026-11-09: 2.11, 2.12 and 2.13 verified live (2.11 and 2.12 rebuild from code with 1.20).
 - **Done:** 1.13 (`db`), 1.14 (`app`), 1.15 (`proxy`). The Suricata rules from PR 60 (decisions 79 to 81) are merged; their deploy and live re-test on fw-ips is pending.
 
 ## Before db (agreed 2026-11-02)
@@ -72,8 +72,7 @@ End every session with: Claude saves `terraform -chdir=terraform/lab plan -var h
   - Verify: the first PR shows all six checks green; a PR with a failing job cannot be merged
 - [ ] **0.6** Makefile skeleton (`up`, `down`, `verify`) · C
   - Verify: `make -n up` prints the steps without executing them
-- [ ] **0.7** First draft of `threat-model.md` · M
-  - Verify: covers assets, trust boundaries and the four attacker positions from §11
+- [x] **0.7** ~~First draft of `threat-model.md`~~ Moved 2026-11-09 to the start of Tier 2 as 2.17 (decision 141) · M
 
 ## Phase 1: Tier 1 on AWS
 
@@ -266,8 +265,10 @@ Targets: own deployment only, never Google/Microsoft APIs. Each one follows atta
 
 ## Tier 2 (gated)
 
-**Attacks (decision 132).** Tier 1 builds every layer and learns how it behaves; every attack waits for Tier 2. Order: the attacker tooling, then the Juice Shop pentest, then the Mailbridge scenarios.
+**Attacks (decision 132).** Tier 1 builds every layer and learns how it behaves; every attack waits for Tier 2. Order: the threat model, then the attacker tooling, then the Juice Shop pentest, then the Mailbridge scenarios.
 
+- [ ] **2.17** First draft of `threat-model.md`, written from the built and verified Tier 1 lab, before any attack: it becomes the pentest's plan (decision 141, was 0.7) · M
+  - Verify: covers assets, trust boundaries and the four attacker positions from §11; every threat names the layer expected to stop or detect it, so 2.15 and 2.2 to 2.5 can test that claim
 - [ ] **2.14** Attacker device certificate in the user pool (decision 73); `attacks/scope.conf` and the wrapper with rate caps (decision 75); separate browser profile for Juice Shop (decision 76); enable GuardDuty, which starts its 30-day trial, and note the end date in `progress.md` (decision 140) · M+C
   - Verify: attacker profile gets 10.8.0.x; the wrapper refuses 10.0.0.2, a public IP and `mail.<domain>` in a Juice Shop run
 - [ ] **2.15** Pentest of the full application (decision 129): reconnaissance, the OWASP Top 10 classes and Juice Shop's challenges, from the attacker certificate through the scope wrapper with rate caps, against the regular defences · M
