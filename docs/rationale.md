@@ -1709,6 +1709,7 @@ For the server block: the same TLS 1.3, HSTS, `server_tokens` and ModSecurity co
 **Trade-off accepted.** Two files to read and rotate instead of one (Ubuntu's logrotate already covers `/var/log/nginx/*.log`, and the evidence export copies the same glob). The access log still holds no request bodies, by design (decision 66).
 
 **Verify.** After a run, `/var/log/nginx/mail.access.log` and `vuln.access.log` fill and `access.log` stays still; a 4xx on each site raises 31101 with `location` `/var/log/nginx/<site>.access.log`; the second run reports `changed=0`.
+
 ## 138. Local rules for the gaps the built-in rules leave (2026-11-09)
 
 **Problem.** Decision 133 says built-in rules first, local rules only for gaps. `wazuh-logtest` on three real lines from this session showed the gaps: the container's `VULN-EGRESS-DROP` line decodes (`action` is the prefix) but stops at 4100, level 0, so none of 2.10's drops reached the dashboard; a wrong password (`POST /auth/login` 401 on mail, `/rest/user/login` 401 on Juice Shop) is only 31101 "Web server 400 error code"; Nginx's 429 line is only 31301 "Nginx error message". The only built-in burst rule, 31151, needs 14 4xx from one address in 90 s, and proxy's auth limit (6 a minute, burst 5) holds a guesser to about 9 per 90 s, so it never fires on password guessing.
