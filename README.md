@@ -449,6 +449,7 @@ Branches follow Conventional Commits (`feat:`, `fix:`, `docs:`, `chore:`), one c
 | [`decisions.md`](docs/decisions.md) | one line per design decision (date · decision · why) |
 | [`rationale.md`](docs/rationale.md) | the reasoning behind each decision: options, choice, trade-off, verification |
 | [`lessons.md`](docs/lessons.md) | per-session write-ups of what was built and learned |
+| [`tier1-writeup.md`](docs/tier1-writeup.md) | **Tier 1 write-up**: what was built, the key decisions, the evidence, known gaps, cost |
 | [`threat-model.md`](docs/threat-model.md) | threat model *(Tier 2, task 2.17: written from the finished Tier 1 lab before any attack)* |
 | [`findings-report.md`](docs/findings-report.md) | attack scenarios: attack → detection → fix → re-test |
 | [`iso27001-map.md`](docs/iso27001-map.md) | ISO 27001 / NIS2 controls map *(Tier 3)* |
