@@ -86,11 +86,12 @@ Order follows ARCHITECTURE.md §13: network → fw-ips (OpenVPN, then NAT) → d
   - Verify: IAM Dashboard shows root MFA enabled; console sign-in as the admin user works
 - [x] **1.1b** AWS Budget alert at $20, by hand now, imported into `terraform/persistent` with 1.2 (day one, §12) · M
   - Verify: in CloudShell, `aws budgets describe-budget --account-id <id> --budget-name mailbridge-lab-monthly` shows a 20 USD limit and `FilterExpression` excludes `Credit` and `Refund`
-- [~] **1.2** `terraform/persistent`: state bucket, flow log bucket, Route 53 zone, ECR repository, budgets; hand-made secrets stay out (decision 143); the backup bucket moves to T2.3 · C
+- [x] **1.2** `terraform/persistent`: state bucket, flow log bucket, Route 53 zone, ECR repository, budgets; hand-made secrets stay out (decision 143); the backup bucket moves to T2.3 · C
   - Note: `/vpn/ca/*` was created by hand. Don't import `/vpn/ca/key` without a plan for its value, because Terraform stores parameter values in state.
   - Note: started 2026-11-02 with `/mailbridge/db-password` only (decision 46). The stack uses the same state bucket under its own key, `persistent/terraform.tfstate`.
   - Note: the `mailbridge` ECR repository added 2026-11-02 (decision 53)
-  - 2026-11-09, PR 1 (decision 143): `imported.tf` imports the state bucket, the flow-log bucket and the zone with every live setting and `prevent_destroy`; the real domain comes from `persistent/terraform.tfvars` (gitignored). Plan: 12 to import, 3 to change (the `Project` tag only), 0 to add or destroy; checkov 0 failed. PR 2: the two budgets, with the subscriber addresses in the gitignored tfvars
+  - 2026-11-09, PR 1 (decision 143): `imported.tf` imports the state bucket, the flow-log bucket and the zone with every live setting and `prevent_destroy`; the real domain comes from `persistent/terraform.tfvars` (gitignored). Plan: 12 to import, 3 to change (the `Project` tag only), 0 to add or destroy; checkov 0 failed. Applied by Marko: 12 imported, 3 changed; second plans of `persistent` and `lab` clean; only the 10 generated parameters are in state
+  - 2026-11-09, PR 2 (decision 144): `budgets.tf` imports `mailbridge-lab-monthly` ($20; 50/80/100 % actual) and `My Monthly Cost Budget` ($10; 50/100 % actual, 70 % forecast), kept by Marko; recipients in the gitignored tfvars as `sensitive` variables. Plan: 2 to import, 2 to change (the tag; the notification blocks only become sensitive, values equal in the plan JSON)
   - Verify: Marko reviews `terraform plan` before any apply; no secret values in the repo or in plan output
 
 **Network (free resources)**
