@@ -75,3 +75,24 @@ SecRule REQUEST_HEADERS:Host "@streq vuln.{{ domain }}" \
                 SecRule REQUEST_HEADERS:Content-Type "@rx ^text/plain(?:;\s*charset=utf-8)?$" \
                     "t:none,t:lowercase,\
                     ctl:ruleRemoveById=920420"
+
+# --- Gmail OAuth callback scope (decision 146) --------------------------------
+# Google returns the granted scopes on the callback, and one of them is
+# https://www.googleapis.com/auth/userinfo.profile: "userinfo.profile" holds
+# ".profile", which CRS 930120 (OS file access) lists as a Unix dotfile, so
+# every Gmail connect got 403. Only 930120, only on the scope argument, only on
+# this route of mail.<domain>; every other rule still reads scope, and 930120
+# still reads every other argument and route. Mailbridge only compares scope
+# with the scopes it asked for and never uses it as a path.
+SecRule REQUEST_HEADERS:Host "@streq mail.{{ domain }}" \
+    "id:10030,\
+    phase:1,\
+    pass,\
+    nolog,\
+    t:none,t:lowercase,\
+    tag:'local/oauth-callback',\
+    chain"
+    SecRule REQUEST_METHOD "@streq GET" "chain"
+        SecRule REQUEST_FILENAME "@streq /accounts/callback/gmail" \
+            "t:none,\
+            ctl:ruleRemoveTargetById=930120;ARGS:scope"

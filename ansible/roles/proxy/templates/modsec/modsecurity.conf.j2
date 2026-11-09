@@ -35,8 +35,15 @@ SecRule MULTIPART_STRICT_ERROR "!@eq 0" \
 SecRule MULTIPART_UNMATCHED_BOUNDARY "@eq 1" \
     "id:200004,phase:2,t:none,log,deny,msg:'Multipart parser detected a possible unmatched boundary.'"
 
-SecPcreMatchLimit 1000
-SecPcreMatchLimitRecursion 1000
+# Regex step limits (decision 146). The sample configuration's 1000 is too low
+# for the CRS: rule 920100's request-line check gave up on a normal OAuth
+# callback (a long query string), and 200005 below then denied it. 100000
+# lets every legitimate request finish its checks; a runaway pattern (ReDoS)
+# is still cut off after a few milliseconds of CPU. 200005 stays: when a
+# limit is hit, the request is refused (fail closed), so padding a request
+# until the checks give up can't get an attack past the WAF.
+SecPcreMatchLimit 100000
+SecPcreMatchLimitRecursion 100000
 SecRule TX:/^MSC_/ "!@streq 0" \
     "id:200005,phase:2,t:none,deny,msg:'ModSecurity internal error flagged: %{MATCHED_VAR_NAME}'"
 
