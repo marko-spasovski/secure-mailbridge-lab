@@ -1757,3 +1757,15 @@ For the server block: the same TLS 1.3, HSTS, `server_tokens` and ModSecurity co
 **Trade-off accepted.** No KMS key (SSE-S3 instead, $1/month saved, one admin), no CloudWatch Logs copy or SNS topic (so no near-real-time alerting on API calls; the logs are read from S3 on demand), no data events (S3 object reads aren't recorded), no access logging or replication on the bucket; each is a checkov skip with its reason. Logs expire after 90 days. Until 2.14, nothing analyses the trail automatically.
 
 **Verify.** `aws cloudtrail get-trail-status --name mailbridge-lab` shows `IsLogging: true` and a recent `LatestDeliveryTime`; log objects appear under `AWSLogs/<account>/CloudTrail/` within about 15 minutes; a test call (`ec2 describe-instances`) is found by `lookup-events` and in a delivered file; after the first hourly digest, `aws cloudtrail validate-logs` reports the files valid; `get-bucket-policy-status` shows `IsPublic: false`; a second plan shows no changes.
+
+## 141. The threat model opens Tier 2 (2026-11-09)
+
+**Problem.** Task 0.7, the first draft of `threat-model.md`, sat in Phase 0 and was still open at the end of Tier 1. Writing it now would mean modelling the threats before the last checks of a lab whose behaviour Tier 1 is still measuring; it also has to exist before any attack, because it says what each attack is meant to prove.
+
+**Options.** A: move it to the start of Tier 2, as 2.17, before the attacker tooling. B: keep it in Tier 1 and write it before the write-up. C: write it after the pentest, from the findings.
+
+**Chosen: A**, decided by Marko. Threat modelling (STRIDE, attack trees) is done before testing in common practice: the model lists assets, trust boundaries and attacker positions, and each threat names the control expected to stop or detect it, so the pentest becomes a test of those claims. Written after Tier 1, it describes the lab as built and verified (the real SGs, nftables, Suricata, ModSecurity and Wazuh rules), not as planned. C would turn it into a summary of findings and lose the "expected versus observed" comparison the findings report needs.
+
+**Trade-off accepted.** Tier 1 closes without a threat model, so the Tier 1 write-up describes controls without the threats they answer; the write-up says so and points to 2.17.
+
+**Verify.** TASKS lists 0.7 as moved and 2.17 first in Tier 2; ARCHITECTURE §13 names it before the attacks; 2.14 doesn't start until 2.17 is reviewed.
