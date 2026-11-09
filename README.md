@@ -6,7 +6,7 @@
 ![Terraform](https://img.shields.io/badge/Terraform-%E2%89%A5%201.11-7B42BC?logo=terraform&logoColor=white)
 ![Ansible](https://img.shields.io/badge/Ansible-roles-EE0000?logo=ansible&logoColor=white)
 ![AWS](https://img.shields.io/badge/AWS-eu--central--1-FF9900?logo=amazonwebservices&logoColor=white)
-![Phase](https://img.shields.io/badge/phase-Tier%201%20build-1d4ed8)
+![Phase](https://img.shields.io/badge/phase-Tier%201%20complete%20%C2%B7%20Tier%202%20next-15803d)
 
 ---
 
@@ -320,7 +320,7 @@ flowchart TB
 
 ## Project status
 
-**Current phase:** Tier 1 on AWS. The live tracker is [`docs/TASKS.md`](docs/TASKS.md), and session notes are in [`docs/progress.md`](docs/progress.md).
+**Current phase:** Tier 1 complete (2026-11-09), summarised in the [Tier 1 write-up](docs/tier1-writeup.md); Tier 2 starts with the threat model. The live tracker is [`docs/TASKS.md`](docs/TASKS.md), and session notes are in [`docs/progress.md`](docs/progress.md).
 
 | Component | Status |
 |---|---|
@@ -332,7 +332,7 @@ flowchart TB
 | vuln: OWASP Juice Shop, isolated, behind the same defences | ✅ in code, verified (task 2.8 to 2.13) |
 | `persistent` stack: secrets, volumes, buckets, zone, ECR, CloudTrail, budgets | ✅ in code; hand-made keys and certificates stay out of state by design |
 | `make plan-up` / `up` / `verify` / `plan-down` / `down` | ✅ in use |
-| End-to-end OAuth check, Tier 1 write-up | 🟡 in progress (tasks 1.19, 1.21) |
+| End-to-end OAuth check (Gmail and Outlook), Tier 1 write-up | ✅ done (tasks 1.19, 1.21, [write-up](docs/tier1-writeup.md)) |
 | Threat model, then the attacks and the findings report | ⬜ Tier 2 |
 | App CI, backups, GuardDuty (Tier 2) and k3s, scanning, ISO 27001 map (Tier 3) | 🔒 gated: each starts only after the previous tier's write-up |
 
