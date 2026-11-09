@@ -1709,3 +1709,51 @@ For the server block: the same TLS 1.3, HSTS, `server_tokens` and ModSecurity co
 **Trade-off accepted.** Juice Shop's password change is a `GET` (`/rest/user/change-password`), which the POST-keyed auth limit doesn't count; only the general limit applies to it, a Tier 2 finding candidate. A new certificate is requested whenever proxy is rebuilt, fine on staging (the open item on keeping certificates before 2.6).
 
 **Verify.** `systemctl list-timers 'lego-renew@*'` shows two timers; vuln's certificate has only `vuln.<domain>` as SAN and a staging issuer; mail's certificate fingerprint is unchanged; `curl https://vuln.<domain>/` returns 200 over the VPN; seven login POSTs to vuln give 429 on the seventh; a mail login right after isn't limited; the second run reports `changed=0`.
+
+## 137. One access log per site (2026-11-09)
+
+**Problem.** Task 2.13 needs Wazuh to tell mail's traffic from Juice Shop's: a pentest finding has to say which application was hit, and a brute-force alert on mail is a different incident from one on vuln. Both sites share proxy's listener and wrote one `access.log` in Nginx's combined format, which has no Host field. The error log (`server:`, `host:`) and the ModSecurity audit log (request headers) already name the site.
+
+**Options.** A: an `access_log` per server block, same combined format, one Wazuh `localfile` each. B: a JSON `log_format` with `$host`, read as JSON. C: add `$host` to a custom text format.
+
+**Chosen: A.** Wazuh's `web-accesslog` decoder and the built-in web rules (31101 4xx, 31103–31105 SQLi, attack and XSS patterns, 31151 bursts) parse exactly the combined format, and decision 133 says built-in rules come first. Every alert carries `location`, the file it came from, so the site is in each alert for free. B and C change the line the decoder expects, so those rules would stop firing, and every one would have to be rewritten as a local rule.
+
+**Trade-off accepted.** Two files to read and rotate instead of one (Ubuntu's logrotate already covers `/var/log/nginx/*.log`, and the evidence export copies the same glob). The access log still holds no request bodies, by design (decision 66).
+
+**Verify.** After a run, `/var/log/nginx/mail.access.log` and `vuln.access.log` fill and `access.log` stays still; a 4xx on each site raises 31101 with `location` `/var/log/nginx/<site>.access.log`; the second run reports `changed=0`.
+
+## 138. Local rules for the gaps the built-in rules leave (2026-11-09)
+
+**Problem.** Decision 133 says built-in rules first, local rules only for gaps. `wazuh-logtest` on three real lines from this session showed the gaps: the container's `VULN-EGRESS-DROP` line decodes (`action` is the prefix) but stops at 4100, level 0, so none of 2.10's drops reached the dashboard; a wrong password (`POST /auth/login` 401 on mail, `/rest/user/login` 401 on Juice Shop) is only 31101 "Web server 400 error code"; Nginx's 429 line is only 31301 "Nginx error message". The only built-in burst rule, 31151, needs 14 4xx from one address in 90 s, and proxy's auth limit (6 a minute, burst 5) holds a guesser to about 9 per 90 s, so it never fires on password guessing.
+
+**Options.** A: children of the built-in parents that already decode each line (4100, 31101, 31301), matching generic signals only: the log prefix, a POST answered 401, the rate-limit zone suffix. B: per-application rules keyed to each login URL. C: lower 31151's threshold through an overwrite.
+
+**Chosen: A.** It reuses Wazuh's decoders (the decision 106 pattern) and works for both apps without knowing their URLs: both answer a refused credential with 401, which is what HTTP defines it for. 100211 counts 10 refusals within 5 minutes from one address, more than a person mistyping and well within what the auth limit lets through in under 2 minutes. The 429 rules key on the zone names proxy defines (`<site>_auth`, `<site>_general`), so they are ours, not an application's. 100120 is level 10, because the container never has a reason to start a connection (decision 130). B ties the SIEM to one application's routes, against decision 129. C would change a scanning rule for every web log and still not say "sign-in".
+
+**Trade-off accepted.** A guesser who stays under 10 refusals per 5 minutes from one address, or rotates addresses, isn't flagged as guessing, only as individual 100210 alerts; Juice Shop answers some non-login POSTs without a token with 401 too, which also count. 100212 and 100213 fire once per rejected request, so a burst gives many alerts.
+
+**Verify.** `wazuh-analysisd -t` passes before deploy; `wazuh-logtest` gives 100120, 100210, 100212 and 100213 on the real lines; live: one connection from inside the container gives 100120; 10 wrong logins to vuln and to mail each give 100211 once, with the per-site `location`; second run `changed=0`.
+
+## 139. socket.io long-polling on Juice Shop (2026-11-09)
+
+**Problem.** Task 2.12 runs Juice Shop's normal use through mail's ModSecurity configuration (decision 129). The API flows (register, log in, basket, address, card, checkout, review) all passed, but the web app's socket.io connection did not: socket.io starts with HTTP long-polling and sends its packets as `POST /socket.io/?EIO=4&transport=polling` with `Content-Type: text/plain;charset=UTF-8`. CRS 920420 allows only the types in `tx.allowed_request_content_type` (form, multipart, XML, JSON), so it scores 5, 949110 answers 403, and the client never upgrades to WebSocket. Every page load breaks Juice Shop's live notifications.
+
+**Options.** A: a local rule before the CRS that removes only 920420 when the Host is `vuln.<domain>`, the method POST, the path `/socket.io/`, `transport=polling` and the Content-Type exactly `text/plain` with an optional UTF-8 charset. B: add `text/plain` to the allowed list in `crs-setup.conf`, for both sites and every route. C: leave it, and accept broken notifications.
+
+**Chosen: A.** It is the same pattern as mail's avatar rule (10010, 10011): name the exact legitimate traffic, then lift only the check it trips. 920420 stays on for mail, for every other route and content type, and every attack rule still runs on this route (a SQLi in the query string still gets 403). B would let any route take an uninspected `text/plain` body, an evasion path across the whole WAF; C contradicts tuning Juice Shop like a production app.
+
+**Trade-off accepted.** ModSecurity has no body processor for `text/plain`, so the body isn't parsed into `ARGS` and rules that read only `ARGS` don't see socket.io payloads on this one route. They carry only challenge notifications. The Host match is exact, so a client that sends `vuln.<domain>:443` gets the 403 again (browsers leave out the default port).
+
+**Verify.** In an Ubuntu 24.04 container with proxy's rendered ModSecurity files and CRS 4.25.0, 13 cases: the polling POST (with and without the charset) and the polling GET give 200 and a `42[...]` message passes; the same POST to mail, `text/plain` to `/rest/user/login`, `transport=websocket`, `text/html`, `charset=utf-7`, `text/plainx`, a SQLi in the query string, `evil.vuln.<domain>` and `/socket.io/x` all give 403; without 10020 the polling POST gives 403 again. Live after deploy: the same polling handshake through proxy gives 200 on vuln and 403 on mail, and the audit log shows no 920420 for it.
+
+## 140. CloudTrail in persistent, GuardDuty with Tier 2 (2026-11-09)
+
+**Problem.** Task 1.18 adds the AWS control-plane view: host logs can't show that someone used proxy's role credentials to change a DNS record, or created an access key, but CloudTrail records every such API call (who, from which address, when, with what result). GuardDuty is AWS's managed detection over CloudTrail, VPC flow logs and DNS logs. Two questions: which stack the trail lives in, and when the GuardDuty trial (30 days, then billed by event volume) starts.
+
+**Options.** Trail: A, in `persistent`, always on; B, in `lab`, only while the hosts run. GuardDuty: A, enable at the start of 2.14; B, enable now, as 1.18 first said; C, never, and rely on CloudTrail, Wazuh and Suricata.
+
+**Chosen: A and A**, decided by Marko. The account is most exposed between sessions, when nobody watches it; a trail destroyed at every teardown leaves exactly those hours unrecorded, and "the trail stopped" is itself what an attacker would cause. Management events in the first trail are free, so always-on costs only S3 storage (cents). Multi-region, because stolen keys are typically used in regions the owner never opens. Log file validation, because the hourly signed digests let `validate-logs` prove that no log was edited or removed. GuardDuty's trial clock starts at enable, and Tier 1 has no attacks (decision 132), so it starts with 2.14 to cover the pentest.
+
+**Trade-off accepted.** No KMS key (SSE-S3 instead, $1/month saved, one admin), no CloudWatch Logs copy or SNS topic (so no near-real-time alerting on API calls; the logs are read from S3 on demand), no data events (S3 object reads aren't recorded), no access logging or replication on the bucket; each is a checkov skip with its reason. Logs expire after 90 days. Until 2.14, nothing analyses the trail automatically.
+
+**Verify.** `aws cloudtrail get-trail-status --name mailbridge-lab` shows `IsLogging: true` and a recent `LatestDeliveryTime`; log objects appear under `AWSLogs/<account>/CloudTrail/` within about 15 minutes; a test call (`ec2 describe-instances`) is found by `lookup-events` and in a delivered file; after the first hourly digest, `aws cloudtrail validate-logs` reports the files valid; `get-bucket-policy-status` shows `IsPublic: false`; a second plan shows no changes.

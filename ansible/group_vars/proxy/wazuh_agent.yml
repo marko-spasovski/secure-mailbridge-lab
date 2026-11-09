@@ -1,10 +1,15 @@
 ---
 # proxy's log sources for its Wazuh agent (task 1.17, decision 105).
 wazuh_agent_localfiles:
-  # Nginx in its default combined format; Wazuh's Nginx guide reads both as
-  # syslog, and its web access-log decoders parse the combined lines.
+  # Nginx in its default combined format; Wazuh's Nginx guide reads these
+  # as syslog, and its web access-log decoders parse the combined lines.
+  # One access log per site (decision 137): the alert's location names it.
+  # The shared access.log only gets the default server, which refuses the
+  # handshake, so nothing is written there.
   - format: syslog
-    location: /var/log/nginx/access.log
+    location: /var/log/nginx/mail.access.log
+  - format: syslog
+    location: /var/log/nginx/vuln.access.log
   - format: syslog
     location: /var/log/nginx/error.log
   # ModSecurity's audit log: Serial, JSON, one transaction per line, parts
