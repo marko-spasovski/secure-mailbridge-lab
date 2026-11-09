@@ -25,6 +25,13 @@ if [ -d /var/log/modsecurity ]; then
   cp -p /var/log/modsecurity/audit.log* "$d/modsecurity/" 2>/dev/null || true
 fi
 
+# vuln: the container's blocked connections and Juice Shop's own output
+# (Docker's journald log driver).
+if systemctl cat juice-shop >/dev/null 2>&1; then
+  j -k --grep 'VULN-EGRESS-DROP ' > "$d/kernel-vuln-egress.log" || true
+  j CONTAINER_NAME=juice-shop > "$d/juice-shop.log" || true
+fi
+
 tar -C "$d" -czf "$out" .
 chmod 0600 "$out"
 echo "$out"

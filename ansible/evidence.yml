@@ -22,7 +22,7 @@
         mode: "0700"
 
 - name: Pack and fetch each host's raw logs
-  hosts: fw_ips:proxy:db:app
+  hosts: fw_ips:proxy:db:app:vuln
   become: true
   gather_facts: false
   vars:
