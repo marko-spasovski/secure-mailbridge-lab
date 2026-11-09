@@ -295,5 +295,6 @@ secure-mailbridge-lab/
   attacks/        scope file and wrapper that refuses targets outside the lab (decision 75)
   docs/           ARCHITECTURE.md · TASKS.md · decisions.md · rationale.md · progress.md · threat-model.md · findings-report.md · iso27001-map.md
   .github/workflows/
+  Makefile        plan-up · up · verify · plan-down · down: the session routine, applying only reviewed plan files (decision 142)
   README.md       one-command deploy + teardown
 ```

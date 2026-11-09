@@ -70,8 +70,9 @@ End every session with: Claude saves `terraform -chdir=terraform/lab plan -var h
   - Verify: `pre-commit run --all-files` passes; a fake AWS key in a test commit is blocked
 - [x] **0.5** CI workflow: `terraform fmt -check`, `terraform validate`, `tflint`, `checkov`, `ansible-lint`, `gitleaks`, then branch protection on `main` · C
   - Verify: the first PR shows all six checks green; a PR with a failing job cannot be merged
-- [ ] **0.6** Makefile skeleton (`up`, `down`, `verify`) · C
+- [x] **0.6** Makefile skeleton (`up`, `down`, `verify`) · C
   - Verify: `make -n up` prints the steps without executing them
+  - Done 2026-11-09 (decision 142): `plan-up`, `up`, `verify`, `plan-down`, `down`, with `preflight` (marko-admin, Ansible key) first; `up` and `down` apply only a saved plan and delete it after; `up` fails unless the second `site.yml` gives `changed=0` everywhere; `down` runs `evidence.yml`, the new `stop.yml` (indexer flush asserted `failed: 0`, Wazuh in order, Prometheus), the apply, then checks 0 instances and 0 Elastic IPs. Verified: `make -n up` prints the steps; `make verify` on the live lab passed in 33 s (plan empty, all hosts ping, four Wazuh services active, 13 Prometheus targets up, VPN, DNS and HTTPS for mail and vuln); the flush returned 37/37 shards, `failed: 0`; ansible-lint 26.10.1 passes. First real `make down` and `make up`: Marko, at the next teardown and start
 - [x] **0.7** ~~First draft of `threat-model.md`~~ Moved 2026-11-09 to the start of Tier 2 as 2.17 (decision 141) · M
 
 ## Phase 1: Tier 1 on AWS

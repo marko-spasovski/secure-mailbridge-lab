@@ -1,0 +1,56 @@
+---
+# Clean stop before teardown (decisions 88, 109), run by `make down` after
+# evidence.yml and before the hosts are destroyed. The Wazuh indexer and
+# Prometheus keep their data on volumes that outlive the hosts; stopping them
+# first means the volume is detached with every write on disk, not mid-write.
+# Usage, from ansible/: ansible-playbook stop.yml
+
+- name: Flush the indexer, then stop Wazuh in order
+  hosts: siem
+  become: true
+  gather_facts: false
+  tasks:
+    # A flush writes every in-memory segment to disk; failed must be 0, or
+    # the stop is aborted and the volume stays attached for a look by hand.
+    - name: Flush every index to disk
+      ansible.builtin.shell: |
+        set -euo pipefail
+        pw=$(/snap/bin/aws ssm get-parameter --region eu-central-1 \
+          --name /siem/indexer-admin-password --with-decryption \
+          --query Parameter.Value --output text)
+        printf 'user = "admin:%s"\n' "$pw" | curl -sS -K - \
+          --cacert /etc/wazuh-indexer/certs/root-ca.pem \
+          -X POST https://10.0.5.10:9200/_flush
+      args:
+        executable: /bin/bash
+      register: stop_flush
+      changed_when: true
+      no_log: true
+
+    - name: Check that no shard failed to flush
+      ansible.builtin.assert:
+        that: (stop_flush.stdout | from_json)._shards.failed == 0
+        success_msg: "flushed {{ (stop_flush.stdout | from_json)._shards.successful }} shards, failed: 0"
+        fail_msg: "the flush reported failed shards; nothing was stopped"
+
+    # Readers first, the indexer last: the dashboard and Filebeat stop
+    # sending, the manager stops writing alerts, then the indexer closes.
+    - name: Stop the dashboard, Filebeat, the manager and the indexer
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - wazuh-dashboard
+        - filebeat
+        - wazuh-manager
+        - wazuh-indexer
+
+- name: Stop Prometheus
+  hosts: mon
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Stop Prometheus, which writes its head block to disk on a clean stop
+      ansible.builtin.systemd_service:
+        name: prometheus
+        state: stopped
