@@ -24,10 +24,14 @@ server:
     # validator would fail every forwarded name.
     module-config: "iterator"
 
-    # Answer this exact name locally. Other names under the domain, such as
-    # the vpn record and _acme-challenge, still resolve publicly.
+    # Answer these exact names locally. Other names under the domain, such
+    # as the vpn record and _acme-challenge, still resolve publicly. Both
+    # sites are served by proxy, which forwards vuln to Juice Shop on
+    # 10.0.6.10 (decision 70); like mail, vuln exists only inside the VPN.
     local-zone: "mail.{{ domain }}." static
     local-data: "mail.{{ domain }}. 60 IN A 10.0.2.10"
+    local-zone: "vuln.{{ domain }}." static
+    local-data: "vuln.{{ domain }}. 60 IN A 10.0.2.10"
 
 # Everything else goes to AmazonProvidedDNS.
 forward-zone:
