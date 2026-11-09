@@ -1519,3 +1519,17 @@ Next session: `Read START.md`, then `make plan-up` (expect **12 to add**), Marko
 18. How do you store a secret with the AWS CLI so it never appears in history, on screen or in `ps`?
 19. A scan says a port is open, but your firewall says it isn't. How do you decide who is right?
 20. Why must you stop scanning an Elastic IP before releasing it?
+
+### Late-evening addendum: the WAF meets a real OAuth callback
+
+The first real Gmail connect returned 403 from proxy, and the audit log showed **two problems, one hiding the other**. First, CRS 920100 checks the request line with a regular expression; at `SecPcreMatchLimit 1000` (ModSecurity's sample value) the engine stopped counting partway through a long but harmless callback URL, set `MSC_PCRE_LIMITS_EXCEEDED`, and rule 200005 denied the request. That is the WAF **failing closed**, which is right: if a check that gives up let the request through, an attacker would pad requests until every check gave up. The fix is a realistic limit (100000), not removing the deny. Second, with the limit raised, CRS 930120 matched `.profile` inside Google's scope `userinfo.profile`, because `.profile` is a Unix dotfile that path-traversal attacks read. Rule 10030 lifts that one rule from that one argument on that one route, the same pattern as rule 10020.
+
+Two lessons: **a WAF false positive often hides another one**, so test again after each fix instead of assuming the first cause was the only one; and **a long, legitimate URL is a test case of its own**, because OAuth, signed links and analytics parameters are exactly what a default regex limit isn't sized for. The harness again proved both directions: the callbacks pass, and SQLi, XSS and `/etc/passwd` in the same request still get 403.
+
+Also from tonight: a host that was just launched isn't reachable yet, so the first contact must retry (`wait_for_connection`) instead of failing; and a CI failure with no logs and jobs that never started is the platform, not your code, so re-run it before you debug it.
+
+**More interview questions**
+
+21. A WAF blocks a legitimate request because a regex hit its step limit. Why must the WAF keep refusing such requests, and how do you fix the false positive?
+22. Why did fixing the first WAF false positive reveal a second one, and how do you test for that?
+23. What does ModSecurity rule 200005 do, and what would happen if it only logged?
