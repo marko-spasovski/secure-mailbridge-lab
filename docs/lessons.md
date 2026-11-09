@@ -1501,3 +1501,21 @@ The budgets name e-mail recipients, and Terraform has to list every subscriber o
 ### What comes next
 
 Next session: `Read START.md`, then `make plan-up` (expect **12 to add**), Marko runs `make up`, then `make verify`. After that comes **1.20**: rebuild the lab from clean, including the network (1.5c), with proxy's rebuild closing 2.11 and 2.12. Then **1.19**, the end-to-end check, which needs the Google and Microsoft test accounts ready. Then 1.21 and the Tier 1 write-up.
+
+### Evening addendum: rebuilding from nothing, OAuth clients, and a scan that lied
+
+**Rebuild from clean (task 1.20).** We destroyed every resource in `lab`, the network included, and rebuilt it from code. One build did two jobs: it proved the rebuild and gave us the lab for the rest of the evening. The build exposed a bug that no dry run could: `make up` waited for `cloud-init` on every host, but private hosts reach SSM, and so Ansible, only through fw-ips's NAT, which doesn't exist until fw-ips is configured. The old routine waited on fw-ips alone, and `site.yml` already waits for each later host. The fix also split the post-apply steps into `make configure`, so a failed `up` resumes without applying again. Lesson: **only a run from nothing tests your boot order**, and a resumable step matters most when the first step is expensive. The result: the second run `changed=0` on all seven hosts, and the persistent data (Wazuh's older indices, the dashboard certificate, Prometheus history) survived the destruction of everything around it.
+
+**OAuth clients per environment (decision 145).** The lab got its own Google project and Entra registration instead of reusing the ones of another deployment. Three reasons to defend: the lab is attacked in Tier 2, so its secrets must be rotatable alone; each client lists only its own redirect URI, so a code can't be redirected between environments; and the lab's clients can be deleted at the end without touching anything else. The secrets went into SSM with `read -s` piped to `--value file:///dev/stdin`: no echo, no shell history, no process argument, no trailing newline. Afterwards we checked only their lengths, which also proved that the Microsoft secret's *Value* was copied and not its *Secret ID*.
+
+**A scan result you must not believe.** The outside scan reported `21/tcp open` on fw-ips, whose security group admits only UDP 1194. Before writing a finding, we checked the target's own evidence: the VPC flow logs showed every probe to port 21 as `REJECT`, and an unroutable documentation address (192.0.2.1) also "answered" on 21. The phone hotspot's carrier intercepts FTP. **A scanner reports what came back to it, not what the target did.** The flow logs also showed the scan's progress, since every rejected probe is a record. And one more safety rule: we stopped the long scan before teardown, because an Elastic IP returns to AWS's pool and could belong to someone else minutes later, and scanning it would then be scanning a stranger.
+
+**UDP 1194 `open|filtered`.** With `tls-crypt`, OpenVPN drops every packet that isn't authenticated with the shared key, so a scanner gets no answer and can't even fingerprint the service. That's why "only UDP 1194 is open" is proven by three things together: TCP all filtered, UDP 1194 silent, and a real client connecting.
+
+**More interview questions**
+
+16. Why did a build from nothing fail when every session's build had worked, and how did you make the fix resumable?
+17. Why does a vulnerable test environment need OAuth clients of its own?
+18. How do you store a secret with the AWS CLI so it never appears in history, on screen or in `ps`?
+19. A scan says a port is open, but your firewall says it isn't. How do you decide who is right?
+20. Why must you stop scanning an Elastic IP before releasing it?
