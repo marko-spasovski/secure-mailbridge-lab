@@ -46,6 +46,23 @@
 
 </group>
 
+<!-- The vuln host's egress block (roles/vuln/files/vuln-egress, decision
+     130): every new connection from the Juice Shop container is logged with
+     the prefix VULN-EGRESS-DROP and dropped. The container never needs to
+     start one, so each is an attempt at SSRF, a reverse shell or
+     exfiltration (decision 133). Without this rule the line stops at 4100,
+     level 0, and is not stored. -->
+<group name="mailbridge,firewall,container,">
+  <rule id="100120" level="10">
+    <if_sid>4100</if_sid>
+    <action>VULN-EGRESS-DROP</action>
+    <description>Juice Shop container tried a new connection, dropped: $(srcip) to $(dstip):$(dstport) $(protocol)</description>
+    <mitre>
+      <id>T1071</id>
+    </mitre>
+    <group>firewall_drop,</group>
+  </rule>
+</group>
 <!-- OpenVPN on fw-ips. Wazuh has rules for logins (81801) and certificate
      failures (81803) but none for the three ways a session ends. -->
 <group name="mailbridge,openvpn,">
@@ -93,4 +110,50 @@
     <group>attack,</group>
   </rule>
 
+</group>
+<!-- Sign-in failures and rate limits on proxy, for mail and vuln alike
+     (decision 138). Application-independent: a POST answered 401 is a
+     refused credential in both apps, and the rate-limit zones are named
+     <site>_auth and <site>_general in proxy's server blocks. -->
+<group name="mailbridge,web,authentication,">
+  <!-- Child of 31101 (any 4xx in an access log). -->
+  <rule id="100210" level="5">
+    <if_sid>31101</if_sid>
+    <id>^401$</id>
+    <match>"POST </match>
+    <description>Web sign-in refused (POST answered 401) from $(srcip): $(url)</description>
+    <group>authentication_failed,</group>
+  </rule>
+  <!-- proxy's auth limit lets one address try 6 a minute plus a burst of 5,
+       so a guesser stays under 31151 (14 4xx in 90 s); 10 refusals in five
+       minutes is more than a person mistyping. -->
+  <rule id="100211" level="10" frequency="10" timeframe="300">
+    <if_matched_sid>100210</if_matched_sid>
+    <same_srcip />
+    <description>10 or more refused web sign-ins from $(srcip) within 5 minutes: possible password guessing</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+    <group>authentication_failures,</group>
+  </rule>
+  <!-- Children of 31301 (any Nginx error line). Nginx logs each 429 as
+       "limiting requests ... by zone "<zone>"", at error (decision 78). -->
+  <rule id="100212" level="6">
+    <if_sid>31301</if_sid>
+    <match>limiting requests</match>
+    <regex>by zone "\w+_auth"</regex>
+    <description>Sign-in rate limit hit by $(srcip) (Nginx 429)</description>
+    <mitre>
+      <id>T1110</id>
+    </mitre>
+  </rule>
+  <rule id="100213" level="4">
+    <if_sid>31301</if_sid>
+    <match>limiting requests</match>
+    <regex>by zone "\w+_general"</regex>
+    <description>Request rate limit hit by $(srcip) (Nginx 429)</description>
+    <mitre>
+      <id>T1498</id>
+    </mitre>
+  </rule>
 </group>

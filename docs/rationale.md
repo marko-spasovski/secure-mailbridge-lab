@@ -1709,3 +1709,15 @@ For the server block: the same TLS 1.3, HSTS, `server_tokens` and ModSecurity co
 **Trade-off accepted.** Two files to read and rotate instead of one (Ubuntu's logrotate already covers `/var/log/nginx/*.log`, and the evidence export copies the same glob). The access log still holds no request bodies, by design (decision 66).
 
 **Verify.** After a run, `/var/log/nginx/mail.access.log` and `vuln.access.log` fill and `access.log` stays still; a 4xx on each site raises 31101 with `location` `/var/log/nginx/<site>.access.log`; the second run reports `changed=0`.
+
+## 138. Local rules for the gaps the built-in rules leave (2026-11-09)
+
+**Problem.** Decision 133 says built-in rules first, local rules only for gaps. `wazuh-logtest` on three real lines from this session showed the gaps: the container's `VULN-EGRESS-DROP` line decodes (`action` is the prefix) but stops at 4100, level 0, so none of 2.10's drops reached the dashboard; a wrong password (`POST /auth/login` 401 on mail, `/rest/user/login` 401 on Juice Shop) is only 31101 "Web server 400 error code"; Nginx's 429 line is only 31301 "Nginx error message". The only built-in burst rule, 31151, needs 14 4xx from one address in 90 s, and proxy's auth limit (6 a minute, burst 5) holds a guesser to about 9 per 90 s, so it never fires on password guessing.
+
+**Options.** A: children of the built-in parents that already decode each line (4100, 31101, 31301), matching generic signals only: the log prefix, a POST answered 401, the rate-limit zone suffix. B: per-application rules keyed to each login URL. C: lower 31151's threshold through an overwrite.
+
+**Chosen: A.** It reuses Wazuh's decoders (the decision 106 pattern) and works for both apps without knowing their URLs: both answer a refused credential with 401, which is what HTTP defines it for. 100211 counts 10 refusals within 5 minutes from one address, more than a person mistyping and well within what the auth limit lets through in under 2 minutes. The 429 rules key on the zone names proxy defines (`<site>_auth`, `<site>_general`), so they are ours, not an application's. 100120 is level 10, because the container never has a reason to start a connection (decision 130). B ties the SIEM to one application's routes, against decision 129. C would change a scanning rule for every web log and still not say "sign-in".
+
+**Trade-off accepted.** A guesser who stays under 10 refusals per 5 minutes from one address, or rotates addresses, isn't flagged as guessing, only as individual 100210 alerts; Juice Shop answers some non-login POSTs without a token with 401 too, which also count. 100212 and 100213 fire once per rejected request, so a burst gives many alerts.
+
+**Verify.** `wazuh-analysisd -t` passes before deploy; `wazuh-logtest` gives 100120, 100210, 100212 and 100213 on the real lines; live: one connection from inside the container gives 100120; 10 wrong logins to vuln and to mail each give 100211 once, with the per-site `location`; second run `changed=0`.
