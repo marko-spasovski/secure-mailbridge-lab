@@ -1,7 +1,9 @@
-# Managed by Ansible (proxy role). Gets or renews the proxy's certificate
-# (decision 59). lego renews only when the certificate is due.
+# Managed by Ansible (proxy role). Gets or renews one of proxy's
+# certificates (decisions 59, 70). A template unit: lego-renew@mail and
+# lego-renew@vuln are two instances of this file, and %i is the part after
+# the @. lego renews only when the certificate is due.
 [Unit]
-Description=Get or renew the proxy's certificate with lego
+Description=Get or renew the %i certificate with lego
 Wants=network-online.target
 After=network-online.target
 
@@ -9,10 +11,12 @@ After=network-online.target
 Type=oneshot
 User=lego
 Group=lego
-EnvironmentFile=/etc/lego/lego.env
-ExecStart=/usr/local/bin/lego run
+EnvironmentFile=/etc/lego/%i.env
+# Both instances share lego's account in /var/lib/lego, so they take turns:
+# flock waits until the other instance has finished.
+ExecStart=/usr/bin/flock /var/lib/lego/.lock /usr/local/bin/lego run
 # "+" runs only this line as root, outside the sandbox below.
-ExecStartPost=+/usr/local/sbin/lego-reload-nginx
+ExecStartPost=+/usr/local/sbin/lego-reload-nginx %i
 
 # lego needs the network and its own directory, nothing else.
 UMask=0077

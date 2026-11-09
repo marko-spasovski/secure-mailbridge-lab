@@ -1,0 +1,67 @@
+# {{ ansible_managed }}
+# vuln.<domain> on proxy: OWASP Juice Shop as a regular shop behind the same
+# defences as mail (task 2.11, decisions 70, 129). Only the VPN reaches it:
+# the name resolves only in Unbound, and the listener is mail's private one.
+# The default server in mail.conf refuses any other name.
+
+# Rate limits like mail's (decisions 77, 78), in zones of their own, so one
+# site can't use up the other's allowance. The auth key is empty for
+# anything but POST, and an empty key isn't counted.
+limit_req_zone $binary_remote_addr zone=vuln_general:10m rate={{ proxy_limit_general_rate }};
+map $request_method $vuln_auth_key {
+    POST    $binary_remote_addr;
+    default "";
+}
+limit_req_zone $vuln_auth_key zone=vuln_auth:10m rate={{ proxy_limit_auth_rate }};
+
+# Juice Shop's challenge notifications use socket.io, which upgrades to a
+# WebSocket. Upgrade and Connection are hop-by-hop headers, so Nginx drops
+# them unless they are set again for the upstream.
+map $http_upgrade $vuln_connection_upgrade {
+    default upgrade;
+    ""      close;
+}
+
+server {
+    listen {{ proxy_private_ip }}:443 ssl http2;
+    server_name vuln.{{ domain }};
+
+    # Its own certificate, never a SAN on mail's (decision 70).
+    ssl_certificate     /var/lib/lego/certificates/vuln.{{ domain }}.crt;
+    ssl_certificate_key /var/lib/lego/certificates/vuln.{{ domain }}.key;
+
+    # TLS 1.3 only, as mail (decision 61).
+    ssl_protocols TLSv1.3;
+    ssl_session_cache shared:vuln_tls:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    server_tokens off;
+    # Nginx alone sets HSTS (decision 62).
+    proxy_hide_header Strict-Transport-Security;
+    add_header Strict-Transport-Security "max-age={{ proxy_hsts_max_age }}" always;
+
+    client_max_body_size 1m;
+
+    # The same ModSecurity configuration as mail (decision 129): CRS 4.25.0,
+    # blocking, PL1. False positives in Juice Shop's normal use are tuned in
+    # 2.12, the way a production shop would be.
+    modsecurity on;
+    modsecurity_rules_file /etc/nginx/modsec/main.conf;
+
+    limit_req_status 429;
+    limit_req_log_level error;
+
+    location / {
+        limit_req zone=vuln_general burst={{ proxy_limit_general_burst }} nodelay;
+        include /etc/nginx/snippets/vuln-proxy.conf;
+    }
+
+    # Juice Shop's sign-in, registration (POST /api/Users), password reset
+    # and second-factor paths: both limits apply, to POSTs only, like mail.
+    location ~ ^/(?:rest/user/login|rest/user/reset-password|rest/2fa/verify|api/Users/?)$ {
+        limit_req zone=vuln_general burst={{ proxy_limit_general_burst }} nodelay;
+        limit_req zone=vuln_auth burst={{ proxy_limit_auth_burst }} nodelay;
+        include /etc/nginx/snippets/vuln-proxy.conf;
+    }
+}

@@ -1683,3 +1683,17 @@ Wazuh's default node names are kept so the role can follow the install guide lin
 **Trade-off accepted.** A host that is really down now costs up to four tries of 60 s plus three 10 s pauses (about 4.5 minutes) before the run fails, instead of 10 s. Integrity is unchanged: every download is still checked against its pinned SHA-256, so a slow or different server can't deliver a different file.
 
 **Verify.** The next fresh `site.yml` passes postgres_exporter's download; `ansible-playbook --check` on a configured host reports the download tasks `ok`; `grep -rA1 'ansible.builtin.get_url:' ansible/roles | grep -c 'timeout: 60'` prints 14, the number of `get_url` tasks.
+
+## 136. Two certificates, one unit file; vuln's server block (2026-11-09)
+
+**Problem.** Decision 70 gives `vuln.<domain>` its own certificate, but proxy had one lego unit pair with one settings file and one "renewed" marker. Juice Shop also needs a server block that matches mail's defences (decision 129) and works with its WebSocket notifications.
+
+**Options.** A: systemd template units, `lego-renew@.service` and `@.timer`, with `%i` naming the site; one settings file and one marker per name. B: two copied unit pairs. C: one certificate with both names (a SAN).
+
+**Chosen: A.** One reviewed, sandboxed unit file serves every name; adding a site is a list entry in `proxy_sites`. B duplicates the sandbox settings, which drift apart. C would present `mail.<domain>` to anyone who opens vuln, against decision 70. Both instances use lego's one account in `/var/lib/lego`, so `ExecStart` runs under `flock` on one lock file and a second instance waits. The reload step takes the name and accepts only `mail` or `vuln`. A proxy built before this change still has the old units; the role stops and removes them when it finds them.
+
+For the server block: the same TLS 1.3, HSTS, `server_tokens` and ModSecurity configuration as mail; rate limits with mail's numbers in zones of their own (`vuln_general`, `vuln_auth`), so a pentest burst on vuln can't push the admin's mail requests into 429. The auth limit covers Juice Shop's `POST /rest/user/login`, `/rest/user/reset-password`, `/rest/2fa/verify` and `/api/Users` (registration), the paths a shop would protect. `Upgrade` and `Connection` are hop-by-hop headers, so they are set again for socket.io. The site is served even when `vuln_enabled` is off; it then answers 502, which costs nothing.
+
+**Trade-off accepted.** Juice Shop's password change is a `GET` (`/rest/user/change-password`), which the POST-keyed auth limit doesn't count; only the general limit applies to it, a Tier 2 finding candidate. A new certificate is requested whenever proxy is rebuilt, fine on staging (the open item on keeping certificates before 2.6).
+
+**Verify.** `systemctl list-timers 'lego-renew@*'` shows two timers; vuln's certificate has only `vuln.<domain>` as SAN and a staging issuer; mail's certificate fingerprint is unchanged; `curl https://vuln.<domain>/` returns 200 over the VPN; seven login POSTs to vuln give 429 on the seventh; a mail login right after isn't limited; the second run reports `changed=0`.

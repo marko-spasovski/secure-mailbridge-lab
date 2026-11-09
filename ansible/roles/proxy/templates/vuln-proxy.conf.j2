@@ -1,0 +1,13 @@
+# {{ ansible_managed }}
+# Forwarding to Juice Shop, included by each location in vuln.conf. Plain
+# HTTP to 10.0.6.10 through fw-ips, where Suricata sees it (decision 68).
+proxy_pass http://{{ proxy_vuln_upstream }};
+proxy_http_version 1.1;
+proxy_set_header Host              $host;
+proxy_set_header X-Forwarded-For   $remote_addr;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_set_header Upgrade           $http_upgrade;
+proxy_set_header Connection        $vuln_connection_upgrade;
+proxy_connect_timeout 10s;
+proxy_send_timeout    60s;
+proxy_read_timeout    60s;
