@@ -1,1 +1,3 @@
 domain = "lab.example.com"
+budget_default_emails = ["you@example.com"]
+budget_lab_emails     = ["you@example.com"]

@@ -257,7 +257,7 @@ For each: attack → detection (or miss) → custom rule/fix → re-test.
 
 ## 12. Cost control
 
-- AWS Budget alert at **$20** on day one
+- AWS Budget alert at **$20** on day one; both budgets (the lab's $20 one and the console's $10 one with a forecast alert) are in `persistent`, with their recipients only in the gitignored tfvars (decision 144)
 - `terraform destroy` when not in use (stopped VMs still pay for disks + public IP). Between sessions, `terraform apply -var hosts_enabled=false` removes every session host (fw-ips with its Elastic IP and the `vpn` record, and the private hosts) (decision 51); the network stays up (decision 16). Each session starts with `terraform apply` and `ansible-playbook site.yml` (decision 41)
 - The Wazuh data volume (20 GB gp3, encrypted, in `persistent`) costs about $1.90/month even between sessions (decision 88)
 - The Prometheus data volume (10 GB gp3, encrypted, in `persistent`) adds about $0.80/month once mon is built (decision 109)
@@ -288,7 +288,7 @@ Everything runs on AWS. There is no VPS phase, and no VPS is used anywhere in th
 secure-mailbridge-lab/
   terraform/
     modules/      network/ security/ compute/   (shared)
-    persistent/   created once, never destroyed: encrypted VPN CA backup + secrets, Wazuh data volume, Prometheus data volume, backup bucket, flow log bucket, state bucket, Route 53 zone, ECR repository, Budget
+    persistent/   created once, never destroyed: encrypted VPN CA backup + secrets, Wazuh data volume, Prometheus data volume, flow log bucket, state bucket, Route 53 zone, ECR repo, CloudTrail and its bucket, budgets (the backup bucket comes with T2.3)sitory, Budget
     lab/          VPC, subnets, SGs (free, kept between sessions) · VMs, Elastic IP, vpn.<domain> record (removed after every session) (uses modules/)
   ansible/        roles: fw_ips/ proxy/ app/ db/ vuln/ siem/ mon/   (Ansible role names cannot contain hyphens; the host stays fw-ips)
   suricata-rules/ custom rules + test pcaps

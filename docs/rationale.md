@@ -1793,3 +1793,15 @@ For the server block: the same TLS 1.3, HSTS, `server_tokens` and ModSecurity co
 **Trade-off accepted.** The hand-made parameters can drift from the documented procedure without Terraform noticing; the inventory in ARCHITECTURE §7 is the control, and each service fails loudly if its parameter is missing. The import blocks stay in the code as a record of where each resource came from. The flow-log bucket stays unversioned and the state bucket keeps every version, as built; both are checkov skips with reasons.
 
 **Verify.** The plan shows 12 to import, 3 to change (tags only), 0 to add and 0 to destroy; after the apply a second plan shows no changes; `terraform state list` includes `aws_s3_bucket.tfstate`, `aws_s3_bucket.flow_logs` and `aws_route53_zone.lab`; `grep -c 'aws_ssm_parameter' ` on the state shows only the generated ones.
+
+## 144. The budgets in code, the recipients out of it (2026-11-09)
+
+**Problem.** The last hand-built pieces of task 1.2 are the two cost budgets: `mailbridge-lab-monthly` ($20, from task 1.1b) and `My Monthly Cost Budget` ($10, made by the console's template). A budget's notifications name their e-mail recipients, and an `aws_budgets_budget` without them would delete every alert on the next apply. The repo is public. Raising the $10 budget to $20 was also on the table.
+
+**Options.** A: import both as built, with the recipients in `sensitive` variables set only in the gitignored `terraform.tfvars`. B: import only the $20 budget and delete the $10 one. C: leave both in the console.
+
+**Chosen: A**, decided by Marko (keep the $10 budget). The forecast alert at 70 % is the only early warning: it fired in November before the actual spend crossed anything. Raising it to $20 would duplicate the other budget, so it stays at $10 and can be changed later in one line. `sensitive` makes Terraform print `(sensitive value)` instead of the addresses in plans and output; the plan's JSON was compared field by field to prove the import changes only the `Project` tag. C keeps the guardrail outside review.
+
+**Trade-off accepted.** The recipients are in the state file (it's private and encrypted, and it already holds every resource's attributes); a fresh clone needs the tfvars before any plan. Two budgets now send overlapping e-mails at 50 % and 100 % of different limits.
+
+**Verify.** The plan shows 2 to import and only tag changes; after the apply a second plan is clean; `aws budgets describe-budgets` lists both with their notifications unchanged.
