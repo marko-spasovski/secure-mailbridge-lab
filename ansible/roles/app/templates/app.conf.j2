@@ -8,3 +8,6 @@ POSTGRES_HOST=10.0.4.10
 POSTGRES_PORT=5432
 POSTGRES_DB=mailbridge
 ALLOW_REGISTRATION={{ app_allow_registration | string | lower }}
+# Personal Microsoft accounts only: the lab's test account is one, and work or
+# school accounts are refused at Microsoft's sign-in (decision 145).
+MICROSOFT_TENANT=consumers
