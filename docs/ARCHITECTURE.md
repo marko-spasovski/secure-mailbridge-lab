@@ -278,7 +278,7 @@ Everything runs on AWS. There is no VPS phase, and no VPS is used anywhere in th
 3. Tier 2: the threat model first, written from the finished Tier 1 lab (decision 141), then the attacks (attacker tooling, the Juice Shop pentest, the Mailbridge scenarios → findings report, decision 132), then CI, backups + restore test (monitoring moved into Tier 1, decision 84)
 4. Tier 3: k3s for app tier, vuln scanning (Nuclei/Greenbone), ISO 27001/NIS2 controls map
 
-**Method for each layer:** build by hand → test → compare with code (`terraform import` + `plan`, or `ansible-playbook --check --diff`) → destroy and rebuild from code → re-test. The final state is always Terraform + Ansible. Exception: the network layer stays up between sessions and its rebuild test is deferred to task 1.20; paid resources are still removed after each session.
+**Method for each layer:** build by hand → test → compare with code (`terraform import` + `plan`, or `ansible-playbook --check --diff`) → destroy and rebuild from code → re-test. The final state is always Terraform + Ansible. The network layer stays up between sessions; its rebuild from code passed on 2026-11-09 (task 1.20: everything in `lab` destroyed, rebuilt from nothing, second run `changed=0`). Paid resources are removed after each session.
 
 **Do not start a tier until the previous tier's write-up is done.**
 
